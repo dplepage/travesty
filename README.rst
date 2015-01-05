@@ -2,7 +2,11 @@
  Travesty: Graph Traversal Dispatchers
 =======================================
 
-Travesty is a collection of tools for doing function dispatch based on a graph.
+Travesty is a collection of tools for doing function dispatch based on a
+graph.
+
+A lot of these tools are specifically aimed at doing function dispatch based
+on a type graph for some object type.
 
 This document uses doctest, so the examples are runnable. We're going to need
 vertigo and travesty, and we'll also use the datetime module::
