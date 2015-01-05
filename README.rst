@@ -1,5 +1,5 @@
 =======================================
- Travesty: Graph Traversal Dispatchers
+ Travesty: Graph Traversal Dispatchers  |travbadge|
 =======================================
 
 Travesty is a collection of tools for doing function dispatch based on a
@@ -383,3 +383,6 @@ wrote earlier and that I hope to integrate with this documentation at some
 point. The second is ``examples_and_notes.py``, which has some quickly thrown-
 together examples.
 
+
+.. |travbadge| image:: https://travis-ci.org/dplepage/travesty.svg?branch=master
+ :target: https://travis-ci.org/dplepage/travesty
