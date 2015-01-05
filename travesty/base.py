@@ -60,13 +60,15 @@ def associate_typegraph(cls, typegraph):
     To work with objects of this type, you'd need to pass in the typegraph
     everywhere:
 
-    >>> tv.undictify(P3TG, {'x':1, 'y':2, 'z':3})
+    >>> tv.undictify(P3TG, (1,2,3))
+    Point3(x=1, y=2, z=3)
 
     associate_typegraph lets you set this typegraph as the default if you use the
     class itself in a travesty call:
 
     >>> associate_typegraph(Point3, P3TG)
-    >>> tv.undictify(Point3, {'x':1, 'y':2, 'z':3})
+    >>> tv.undictify(Point3, (1,2,3))
+    Point3(x=1, y=2, z=3)
     '''
     _c2t[cls] = typegraph
 

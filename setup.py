@@ -27,6 +27,9 @@ See README.rst for more info.
     install_requires=[
         'vertigo'
     ],
+    test_requires=[
+        'doctest-ignore-unicode'
+    ],
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Programming Language :: Python :: 2",
