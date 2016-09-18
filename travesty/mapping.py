@@ -1,16 +1,13 @@
 import sys
-if sys.version < '3': # pragma: no cover
-    unicode_type = unicode
-    bytes_type = str
-else: # pragma: no cover
-    bytes_type = bytes
-    unicode_type = str
+from collections import OrderedDict
+if sys.version >= '3': # pragma: no cover
     basestring = str
 
 import vertigo as vg
 
-from .invalid import Invalid, InvalidAggregator
-from .base import Marker, traverse, validate, dictify, undictify, to_typegraph
+from .invalid import Invalid
+from .base import graphize, traverse, clone, mutate, validate
+from .base import Marker, IGNORE, to_typegraph, aggregating_errors
 from .schema import Schema
 
 class SchemaMapping(Schema):
@@ -19,16 +16,15 @@ class SchemaMapping(Schema):
     The children of this node in the typegraph indicate the types of the keyed
     attributes to traverse.
 
-    >>> from collections import OrderedDict
     >>> from datetime import date
-    >>> from . import Int, Date
+    >>> from . import Int, Date, undictify, dictify
     >>> G = vg.PlainGraphNode
 
     >>> bday = date(1985, 9, 16)
     >>> schema = G(SchemaMapping(), [("age",G(Int())), ("birthday",G(Date()))])
     >>> def mk(age, birthday):
     ...     return OrderedDict([('age', age), ('birthday', birthday)])
-    >>> print(vg.ascii_tree(traverse(schema, mk(age=27, birthday=bday))))
+    >>> print(vg.ascii_tree(graphize(schema, mk(age=27, birthday=bday))))
     root: OrderedDict([('age', 27), ('birthday', datetime.date(1985, 9, 16))])
       +--age: 27
       +--birthday: datetime.date(1985, 9, 16)
@@ -98,44 +94,40 @@ class SchemaMapping(Schema):
         super(SchemaMapping, self).__init__()
         self.extra_field_policy=extra_field_policy
 
+
 @validate.when(SchemaMapping)
-def validate_mapping(dispgraph, value, **kwargs):
-    if not isinstance(value, dict):
-        raise Invalid("type_error", "Expected dict, got {}".format(type(value)))
+def validate_mapping(dispgraph, value, **kw):
+    error_mode = kw.get('error_mode', IGNORE)
     marker = dispgraph.marker
-    error_agg = InvalidAggregator(autoraise = kwargs.get('fail_early', False))
-    with error_agg.checking():
-        dispgraph.super(SchemaMapping)(value, **kwargs)
-    if marker.extra_field_policy in ['error', 'discard']:
+    with aggregating_errors(error_mode) as agg:
+        dispgraph.super(SchemaMapping)(value, **kw)
+        if agg and marker.extra_field_policy in ['discard', 'error']:
+            extra_keys = set(value.keys()) - set(dispgraph.key_iter())
+            if extra_keys:
+                agg.own_error(Invalid('unexpected_fields', keys=extra_keys))
+
+
+@clone.when(SchemaMapping)
+def clone_mapping(dispgraph, value, **kw):
+    error_mode = kw.get('error_mode', IGNORE)
+    marker = dispgraph.marker
+    with aggregating_errors(error_mode) as agg:
+        result = dispgraph.super(SchemaMapping)(value, **kw)
         extra_keys = set(value.keys()) - set(dispgraph.key_iter())
         if extra_keys:
-            error_agg.own_error(Invalid('unexpected_fields', keys=extra_keys))
-    error_agg.raise_if_any()
-
-@dictify.when(SchemaMapping)
-def dictify_mapping(dispgraph, value, **kwargs):
-    marker = dispgraph.marker
-    result = dispgraph.super(SchemaMapping)(value, **kwargs)
-    if marker.extra_field_policy == 'save':
-        for key in set(value.keys()) - set(dispgraph.key_iter()):
-            result[key] = value[key]
+            if agg and marker.extra_field_policy == 'error':
+                agg.own_error(Invalid('unexpected_fields', keys=extra_keys))
+            if marker.extra_field_policy == 'save':
+                for key in extra_keys:
+                    result[key] = value[key]
     return result
 
 
-@undictify.when(SchemaMapping)
-def undictify_mapping(dispgraph, value, **kwargs):
-    marker = dispgraph.marker
-    error_agg = InvalidAggregator(autoraise = kwargs.get('fail_early', False))
-    with error_agg.checking():
-        result = dispgraph.super(SchemaMapping)(value, **kwargs)
-    extra_keys = set(value.keys()) - set(dispgraph.key_iter())
-    if marker.extra_field_policy == 'error' and extra_keys:
-        error_agg.own_error(Invalid('unexpected_fields', keys=extra_keys))
-    elif marker.extra_field_policy == 'save':
-        for key in extra_keys:
-            result[key] = value[key]
-    error_agg.raise_if_any()
-    return result
+@mutate.when(SchemaMapping)
+def mutate_mapping(dispgraph, value, **kw):
+    newval = clone_mapping(dispgraph, value, **kw)
+    value.update(newval)
+    return value
 
 
 class StrMapping(Marker):
@@ -145,11 +137,11 @@ class StrMapping(Marker):
 
     >>> from collections import OrderedDict
     >>> from vertigo import PlainGraphNode as G
-    >>> from . import Int, Date, List
+    >>> from . import Int, Date, List, undictify, dictify
     >>> from datetime import date
     >>> StringToNumList = StrMapping().of(List().of(Int()))
     >>> example = OrderedDict([("foo",[1,2,3,4]), ("bar",[6,12,-4])])
-    >>> print(vg.ascii_tree(traverse(StringToNumList, example), sort=True))
+    >>> print(vg.ascii_tree(graphize(StringToNumList, example), sort=True))
     root: OrderedDict([('foo', [1, 2, 3, 4]), ('bar', [6, 12, -4])])
       +--bar: [6, 12, -4]
       |  +--0: 6
@@ -163,7 +155,7 @@ class StrMapping(Marker):
     >>> cstruct = dictify(StringToNumList, example)
     >>> cstruct == {'foo':[1,2,3,4], 'bar':[6,12,-4]}
     True
-    >>> undictify(StringToNumList, cstruct) == example
+    >>> undictify(StringToNumList, cstruct) == dict(example)
     True
     >>> undictify(StringToNumList, None)
     Traceback (most recent call last):
@@ -199,61 +191,56 @@ class StrMapping(Marker):
     def of(self, sub):
         return vg.PlainGraphNode(self, sub = to_typegraph(sub))
 
+def apply_strmap(dispgraph, value, kw):
+    '''Apply a dispgraph to each element in value.
+
+    This also handles error checking - if agg is not None, this will typecheck
+    value and recurse to each element within agg.checking_sub().
+    '''
+    error_mode = kw.get('error_mode', IGNORE)
+    vfn = lambda x: dispgraph['sub'](x, **kw)
+    if error_mode == IGNORE:
+        return {key:vfn(val) for (key, val) in value.items()}
+    if not isinstance(value, dict):
+        msg = "Expected dict, got {}".format(type(value))
+        raise Invalid("type_error", msg, fatal=True)
+    result = OrderedDict()
+    bad_keys = []
+    with aggregating_errors(error_mode) as agg:
+        for key, val in value.items():
+            if not isinstance(key, basestring):
+                bad_keys.append(key)
+                continue
+            with agg.checking_sub(key):
+                result[key] = vfn(val)
+        if bad_keys:
+            raise Invalid("value_error/bad_keys", "Bad keys", keys=bad_keys)
+    return result
+
+
+@graphize.when(StrMapping)
+def graphize_strmap(dispgraph, value, **kw):
+    edges = apply_strmap(dispgraph, value, kw).items()
+    if 'zipval' in dispgraph.extras:
+        value = (value, dispgraph.extras.zipval)
+    return vg.PlainGraphNode(value, edges)
+
+
+@clone.when(StrMapping)
+def clone_strmap(dispgraph, value, **kw):
+    return apply_strmap(dispgraph, value, kw)
+
+
+@mutate.when(StrMapping)
+def mutate_strmap(dispgraph, value, **kw):
+    value.update(apply_strmap(dispgraph, value, kw))
+    return value
+
+
 @traverse.when(StrMapping)
-def traverse_strmap(dispgraph, value, zipgraph=None, **kwargs):
-    edges = []
-    valgraph = dispgraph['sub']
-    valzip = zipgraph['sub'] if zipgraph else None
-    for key, val in value.items():
-        edges.append((key, valgraph(val, valzip, **kwargs)))
-    v = value
-    if zipgraph:
-        v = (v, zipgraph.value)
-    return vg.PlainGraphNode(v, edges)
+def traverse_strmap(dispgraph, value, **kw):
+    apply_strmap(dispgraph, value, kw)
 
-@undictify.when(StrMapping)
-def undictify_strmap(dispgraph, value, **kwargs):
-    if not isinstance(value, dict):
-        raise Invalid("type_error", "Expected dict, got {}".format(type(value)))
-    # If fail_early is True, then gather all errors from this and its
-    # children. Otherwise, just raise the first error we encounter.
-    error_agg = InvalidAggregator(autoraise = kwargs.get('fail_early', False))
-    data = {}
-    bad_keys = []
-    for key, val in value.items():
-        if not isinstance(key, basestring):
-            bad_keys.append(key)
-            continue
-        with error_agg.checking_sub(key):
-            val = dispgraph['sub'](val, **kwargs)
-        data[key] = val
-    if bad_keys:
-        with error_agg.checking():
-            raise Invalid("value_error/bad_keys", "Bad keys", keys=bad_keys)
-    error_agg.raise_if_any()
-    return data
-
-@dictify.when(StrMapping)
-def dictify_strmap(dispgraph, value, **kwargs):
-    sub = dispgraph['sub']
-    return {key:sub(val, **kwargs) for (key, val) in value.items()}
-
-@validate.when(StrMapping)
-def validate_strmap(dispgraph, value, **kwargs):
-    if not isinstance(value, dict):
-        raise Invalid("type_error", "Expected dict, got {}".format(type(value)))
-    error_agg = InvalidAggregator(autoraise = kwargs.get('fail_early', False))
-    bad_keys = []
-    for key, val in value.items():
-        if not isinstance(key, basestring):
-            bad_keys.append(key)
-            continue
-        with error_agg.checking_sub(key):
-            dispgraph['sub'](val, **kwargs)
-    if bad_keys:
-        with error_agg.checking():
-            raise Invalid("value_error/bad_keys", "Bad keys", keys=bad_keys)
-    error_agg.raise_if_any()
 
 class UniMapping(Marker):
     '''Marker for dicts with homogenous keys and homogenous values.
@@ -263,7 +250,7 @@ class UniMapping(Marker):
 
     >>> from collections import OrderedDict
     >>> from vertigo import PlainGraphNode as G
-    >>> from . import Int, Date, List
+    >>> from . import Int, Date, List, undictify, dictify
     >>> from datetime import date
     >>> DateToNumList = G.build(dict(
     ...     _self=UniMapping(),
@@ -272,7 +259,7 @@ class UniMapping(Marker):
     ... )
     >>> d1, d2 = date(1985, 9, 16), date(1980, 3, 17)
     >>> example = OrderedDict([(d1,[1,2,3,4]), (d2,[6,12,-4])])
-    >>> print(vg.ascii_tree(traverse(DateToNumList, example), sort=True))
+    >>> print(vg.ascii_tree(graphize(DateToNumList, example), sort=True))
     root: OrderedDict([(datetime.date(1985, 9, 16), [1, 2, 3, 4]), (datetime.date(1980, 3, 17), [6, 12, -4])])
       +--key_0: datetime.date(1985, 9, 16)
       +--key_1: datetime.date(1980, 3, 17)
@@ -326,57 +313,62 @@ class UniMapping(Marker):
         key, val = to_typegraph(key), to_typegraph(val)
         return vg.PlainGraphNode(self, key=key, val=val)
 
-@traverse.when(UniMapping)
-def traverse_unimap(dispgraph, value, zipgraph=None, **kwargs):
+
+def apply_unimap(dispgraph, value, kw):
+    '''Apply a dispgraph to each element in value.
+
+    This also handles error checking - if agg is not None, this will typecheck
+    value and recurse to each element within agg.checking_sub().
+    '''
+    error_mode = kw.get('error_mode', IGNORE)
+    kfn = lambda x: dispgraph['key'](x, **kw)
+    vfn = lambda x: dispgraph['val'](x, **kw)
+    result = OrderedDict()
+    if error_mode == IGNORE:
+        for (key, val) in value.items():
+            result[kfn(key)] = vfn(val)
+        return result
+    if not isinstance(value, dict):
+        msg = "Expected dict, got {}".format(type(value))
+        raise Invalid("type_error", msg, fatal=True)
+    with aggregating_errors(error_mode) as agg:
+        for i, (key, val) in enumerate(value.items()):
+            with agg.checking_sub('key_{}'.format(i)):
+                key = kfn(key)
+            with agg.checking_sub('value_{}'.format(i)):
+                val = vfn(val)
+            result[key] = val
+    return result
+
+@graphize.when(UniMapping)
+def graphize_unimap(dispgraph, value, **kw):
+    result = apply_unimap(dispgraph, value, kw)
     edges = []
-    keygraph = dispgraph['key']
-    valgraph = dispgraph['val']
-    keyzip = zipgraph['key'] if zipgraph else None
-    valzip = zipgraph['val'] if zipgraph else None
-    for i, (key, val) in enumerate(value.items()):
-        edges.append(('key_{}'.format(i), keygraph(key, keyzip, **kwargs)))
-        edges.append(('value_{}'.format(i), valgraph(val, valzip, **kwargs)))
-    v = value
-    if zipgraph:
-        v = (v, zipgraph.value)
-    return vg.PlainGraphNode(v, edges)
+    for i, (key, val) in enumerate(result.items()):
+        edges.append(('key_{}'.format(i), key))
+        edges.append(('value_{}'.format(i), val))
+    if 'zipval' in dispgraph.extras:
+        value = (value, dispgraph.extras.zipval)
+    return vg.PlainGraphNode(value, edges)
 
 
-@undictify.when(UniMapping)
-def undictify_unimap(dispgraph, value, **kwargs):
-    if not isinstance(value, dict):
-        raise Invalid("type_error", "Expected dict, got {}".format(type(value)))
-    # If fail_early is True, then gather all errors from this and its
-    # children. Otherwise, just raise the first error we encounter.
-    error_agg = InvalidAggregator(autoraise = kwargs.get('fail_early', False))
-    data = {}
-    for i, (key, val) in enumerate(value.items()):
-        with error_agg.checking_sub('key_{}'.format(i)):
-            key = dispgraph['key'](key, **kwargs)
-        with error_agg.checking_sub('value_{}'.format(i)):
-            val = dispgraph['val'](val, **kwargs)
-        data[key] = val
-    error_agg.raise_if_any()
-    return data
+@clone.when(UniMapping)
+def clone_unimap(dispgraph, value, **kw):
+    return apply_unimap(dispgraph, value, kw)
 
-@dictify.when(UniMapping)
-def dictify_unimap(dispgraph, value, **kwargs):
-    kdfy = lambda x: dispgraph['key'](x, **kwargs)
-    vdfy = lambda x: dispgraph['val'](x, **kwargs)
-    return {kdfy(key):vdfy(val) for (key, val) in value.items()}
 
-@validate.when(UniMapping)
-def validate_unimap(dispgraph, value, **kwargs):
-    if not isinstance(value, dict):
-        raise Invalid("type_error", "Expected dict, got {}".format(type(value)))
-    error_agg = InvalidAggregator(autoraise = kwargs.get('fail_early', False))
-    for i, (key, val) in enumerate(value.items()):
-        with error_agg.checking_sub('key_{}'.format(i)):
-            dispgraph['key'](key, **kwargs)
-        with error_agg.checking_sub('value_{}'.format(i)):
-            dispgraph['val'](val, **kwargs)
-    error_agg.raise_if_any()
+@mutate.when(UniMapping)
+def mutate_unimap(dispgraph, value, **kw):
+    new_values = apply_unimap(dispgraph, value, kw)
+    # Clear in case the keys were mutated
+    value.clear()
+    value.update(new_values)
+    return value
 
+
+@traverse.when(UniMapping)
+def traverse_unimap(dispgraph, value, **kw):
+    apply_unimap(dispgraph, value, kw)
 
 
 if __name__ == '__main__': # pragma: no cover

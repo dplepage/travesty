@@ -28,10 +28,10 @@ def expecting(error_type):
 def expecting_invalid(msg):
     with expecting(Invalid) as e:
         yield e
-    assert e.error.id_string() == msg, e.error.id_string()
+    assert e.error.id_string() == msg
 
 
 def match_asc(g, s):
     x = vg.ascii_tree(g, sort=True)
-    assert x == textwrap.dedent(s).strip(), x
+    assert x == textwrap.dedent(s).strip()
 

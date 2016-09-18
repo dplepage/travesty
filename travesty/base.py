@@ -1,14 +1,11 @@
-import sys
-
-if sys.version >= '3': # pragma: no cover
-    unicode = str
-    basestring = str
+from contextlib import contextmanager
 
 import vertigo as vg
 
 from .cantrips.dispatcher import Dispatcher
 from .cantrips.subclass import SubclassMixin
 from .dispatch_graph import DynamicDispatchGraph
+from .invalid import InvalidAggregator
 
 class Marker(SubclassMixin):
     '''This is a placeholder type for all types used as typemarkers.'''
@@ -70,7 +67,7 @@ def associate_typegraph(cls, typegraph):
     >>> tv.undictify(Point3, (1,2,3))
     Point3(x=1, y=2, z=3)
     '''
-    _c2t[cls] = typegraph
+    _c2t[cls] = to_typegraph(typegraph)
 
 @cls_to_typegraph.when(Traversable)
 def traversable_to_typegraph(d, t):
@@ -109,12 +106,13 @@ class GraphDispatcher(Dispatcher):
         '''Create a new dispatcher with the same keyfn and self as a parent.'''
         return type(self)(parents=(self,)+tuple(parents))
 
-    def call(self, graph, *args, **kwargs):
-        graph = self._mk_graph(graph)
+    def raw_call(self, graph, *args, **kwargs):
+        extras_graphs = kwargs.pop('extras_graphs', {})
+        graph = self._mk_graph(graph, extras_graphs)
         return graph(*args, **kwargs)
 
-    def _mk_graph(self, graph):
-        return DynamicDispatchGraph(to_typegraph(graph), self)
+    def _mk_graph(self, graph, extras_graphs=None):
+        return DynamicDispatchGraph(to_typegraph(graph), self, extras_graphs)
 
 class Wrapper(Marker):
     '''A root for all markers that wrap other markers directly.
@@ -129,7 +127,7 @@ class Wrapper(Marker):
     I've gone back and forth several times on whether Wrappers should actually
     have handles on their markers or just be nodes in the graph with .sub being
     the interior wrapper. I eventually decided to go this route mainly because
-    it means that you use traverse to zip an object to its typegraph; if a
+    it means that you can use graphize to zip an object to its typegraph; if a
     Wrapper is an actual separate node that just gets skipped, then that zip is
     no longer possible.
     '''
@@ -165,7 +163,7 @@ When called with only one argument m, unwrap removes all wrappers from m,
 returning the innermost marker.
 
 When called with a second argument `type`, unwrap removes wrappers until it
-finds one of this type, at which point it returns it. If none is find, it will
+finds one of this type, at which point it returns it. If none is found, it will
 return None.
 
 Note that travesty's GraphDispatchers will recurse into Wrappers automatically
@@ -188,11 +186,11 @@ def core_marker(marker):
 
 # Base dispatcher for all travesty-provided types. Adding new functionality to
 # this dispatcher is generally a bad idea unless you know what you're doing.
-# When you add a new function to this dispatcher, it will be added to
-# traverse, dictify, undictify, and validate. It should therefore be very
-# general - ideally the signature should be def f(dispgraph, *args, **kwargs),
-# so that any other sub-dispatchers' arguments will be unaffected by it. See
-# e.g. pass_through_wrapper below
+# When you add a new function to this dispatcher, it will be added to graphize,
+# dictify, undictify, and validate. It should therefore be very general -
+# ideally the signature should be def f(dispgraph, *args, **kwargs), so that any
+# other sub-dispatchers' arguments will be unaffected by it. See e.g.
+# pass_through_wrapper below.
 base_dispatcher = GraphDispatcher()
 
 @base_dispatcher.when(Wrapper)
@@ -203,7 +201,7 @@ def pass_through_wrapper(dispgraph, *args, **kwargs):
     subclassing Wrapper and customizing only the dispatcher you care about.
 
     For example, a wrapper might have a bunch of extra validation functions;
-    traverse, dictify, etc. will ignore these and continue on to the base type,
+    graphize, dictify, etc. will ignore these and continue on to the base type,
     but you'd customize validate to run the extra validation functions.
     '''
     return dispgraph.inner(*args, **kwargs)
@@ -218,40 +216,57 @@ def make_dispatcher(parents=()):
     return GraphDispatcher(parents = parents + (base_dispatcher,))
 
 
-# The core methods provided by dfiance
-
-# In addition to the typegraph, traverse takes the value being traversed and an
-# optional keyword argument zipgraph. If zipgraph is not provided, then the
-# result is a graph wrapped around the input value. If zipgraph IS provided, the
-# resulting graph will have a tuple (v, zv) at each node, where v is the value
-# that node would have had without a zipgraph argument and zv is the
-# corresponding value from the zipgraph.
-#
-# In essence, the zipgraph argument allows you to zip the traversal graph with
-# another graph when the other graph is structured like the *typegraph* instead
-# of like the traversal graph.
-traverse = make_dispatcher()
-@traverse.when(Leaf)
-def traverse_object(dispgraph, value, zipgraph=None, **kwargs):
+# The core methods provided by travesty
+# graphize wraps an object in a vertigo graph. If the zipval extras_graph is
+# passed in, the returned graph's values will be tuples of (object, zipval).
+graphize = make_dispatcher()
+@graphize.when(Leaf)
+def graphize_object(dispgraph, value, **kwargs):
     '''Default: wrap object in leaf node'''
-    if zipgraph:
-        return vg.PlainGraphNode((value, zipgraph.value))
+    if 'zipval' in dispgraph.extras:
+        return vg.PlainGraphNode((value, dispgraph.extras.zipval))
     return vg.PlainGraphNode(value)
 
-# validate functions take the graph and a value, and raise Invalid if the value
-# is somehow invalid.
-validate = make_dispatcher()
-@validate.when(Marker)
-def validate_object(dispgraph, value, **kwargs):
+IGNORE = 0
+CHECK = 1
+CHECK_ALL = 2
+
+@contextmanager
+def aggregating_errors(error_mode):
+    if error_mode == IGNORE:
+        yield None
+    else:
+        agg = InvalidAggregator(autoraise=error_mode==CHECK)
+        with agg.checking():
+            yield agg
+        agg.raise_if_any()
+
+# traverse simply walks a value.
+traverse = make_dispatcher()
+@traverse.when(Marker)
+def traverse_object(dispgraph, value, **kwargs):
     pass
 
+# validate traverses and complains if an object is invalid
+validate = traverse.sub()
+# We wrap it to get CHECK_ALL by default
+validate.default_value('error_mode', CHECK_ALL)
+
+# clone copies an object
+clone = make_dispatcher()
+
+# mutate updates an object in-place, as best as possible
+mutate = clone.sub()
+
 # dictify turns an object into a JSON-serializable structure
-dictify = make_dispatcher()
+dictify = clone.sub()
+
 # undictify is the inverse of dictify
-undictify = make_dispatcher()
-# Leaves are passed through by default
-@dictify.when(Leaf)
-@undictify.when(Leaf)
+undictify = clone.sub()
+# We wrap it to get CHECK_ALL by default
+undictify.default_value('error_mode', CHECK_ALL)
+
+# Leaves are passed through clone et al. by default
+@clone.when(Leaf)
 def passthrough_tl(dispgraph, value, **kwargs):
     return value
-

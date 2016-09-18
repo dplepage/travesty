@@ -1,12 +1,14 @@
 import vertigo as vg
 
-from .base import Marker, Traversable, to_typegraph
-from .base import traverse, validate, dictify, undictify
+from .base import Marker, Traversable, to_typegraph, IGNORE
+from .base import graphize, validate, clone, dictify, undictify
 from .invalid import Invalid
+
 
 class UnknownType(Exception):
     '''Raised when a Polymorph encounters an unknown type.'''
     pass
+
 
 class Polymorph(Marker):
     '''The following docstring is ENTIRELY SUSPECT. TODO: Fix it.
@@ -68,15 +70,15 @@ class Polymorph(Marker):
     ...
     Invalid: type_error - Unrecognized type: <type 'str'>
 
-    Traversal with a zipgraph expects the graph to have keys matching the main
+    Traversal with zipvals expects the graph to have keys matching the main
     graph structure, as always, but note that the graph value at the actual
-    Polymorph will be ignored
+    Polymorph will be ignored:
 
     >>> g = vg.from_dict(dict(_self="Ignored", num="A number", point=dict(
     ... _self="A Point", x="The X", y="The Y")))
-    >>> print(vg.ascii_tree(traverse(num_or_point, 3, zipgraph=g)))
+    >>> print(vg.ascii_tree(graphize(num_or_point, 3, extras_graphs=dict(zipval=g))))
     root: (3, 'A number')
-    >>> print(vg.ascii_tree(traverse(num_or_point, p, zipgraph=g), sort=True))
+    >>> print(vg.ascii_tree(graphize(num_or_point, p, extras_graphs=dict(zipval=g)), sort=True))
     root: (Point(-1, (2+2j)), 'A Point')
       +--x: (-1, 'The X')
       +--y: ((2+2j), 'The Y')
@@ -108,8 +110,8 @@ class Polymorph(Marker):
         '''Given an object, get the corresponding name.'''
         return self.name_for_type(type(value))
 
-    def of(self, **kwargs):
-        children = {key:to_typegraph(val) for key, val in kwargs.items()}
+    def of(self, **kw):
+        children = {key:to_typegraph(val) for key, val in kw.items()}
         return vg.PlainGraphNode(self, **children)
 
     @classmethod
@@ -126,31 +128,53 @@ class Polymorph(Marker):
         return cls(lookup).of(**children)
 
 
-@undictify.when(Polymorph)
-def undictify_pmorph(dispgraph, value, **kwargs):
-    '''Convert a dictified value to an object and return it.'''
-    if not isinstance(value, (list, tuple)):
-        raise Invalid('type_error')
-    if len(value) != 2:
-        raise Invalid('bad_list')
-    name, value = value
-    return dispgraph[name](value, **kwargs)
+def apply_pmorph(dispgraph, value, error_mode=IGNORE, **kw):
+    '''Returns (name, dictified_value), where name is the polymorphic id.'''
+    kw['error_mode'] = error_mode
+    try:
+        name = dispgraph.marker.name_for_val(value)
+    except UnknownType:
+        if error_mode == IGNORE:
+            raise
+        raise Invalid("type_error", "Unknown type: {}".format(type(value)))
+    value = dispgraph[name](value, **kw)
+    return (name, value)
+
+
+@clone.when(Polymorph)
+def clone_pmorph(dispgraph, value, error_mode=IGNORE, **kw):
+    name, value = apply_pmorph(dispgraph, value, error_mode, **kw)
+    return value
+
 
 @dictify.when(Polymorph)
-def dictify_pmorph(dispgraph, value, **kwargs):
-    name = dispgraph.marker.name_for_val(value)
-    return (name, dispgraph[name](value, **kwargs))
+def dictify_pmorph(dispgraph, value, error_mode=IGNORE, **kw):
+    '''Returns (name, dictified_value), where name is the polymorphic id.'''
+    return apply_pmorph(dispgraph, value, error_mode, **kw)
+
+
+@undictify.when(Polymorph)
+def undictify_pmorph(dispgraph, value, error_mode=IGNORE, **kw):
+    kw['error_mode'] = error_mode
+    if error_mode != IGNORE:
+        if not isinstance(value, (list, tuple)):
+            raise Invalid('type_error')
+        if len(value) != 2:
+            raise Invalid('bad_list')
+    name, value = value
+    return dispgraph[name](value, **kw)
+
 
 @validate.when(Polymorph)
-def validate_pmorph(dispgraph, value, **kwargs):
+def validate_pmorph(dispgraph, value, **kw):
     try:
         name = dispgraph.marker.name_for_val(value)
     except UnknownType:
         raise Invalid("type_error", "Unrecognized type: {}".format(type(value)))
-    dispgraph[name](value, **kwargs)
+    dispgraph[name](value, **kw)
 
-@traverse.when(Polymorph)
-def traverse_pmorph(dispgraph, value, zipgraph=None, **kwargs):
+
+@graphize.when(Polymorph)
+def graphize_pmorph(dispgraph, value, **kw):
     name = dispgraph.marker.name_for_val(value)
-    zg = zipgraph[name] if zipgraph else None
-    return dispgraph[name](value, zg, **kwargs)
+    return dispgraph[name](value, **kw)

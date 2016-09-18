@@ -41,7 +41,7 @@ swap out pieces of functionality.
 Graph Dispatchers and Dispatch Graphs
 =====================================
 
-The core of Travesty is the notion of a *dispatch graph*, which is a sort of
+The core of travesty is the notion of a *dispatch graph*, which is a sort of
 hybride of the two ideas above - it's a vertigo graph where each node's value
 is a *marker* that indicates how various functions should react to this node.
 Alongside dispatch graphs, we have *graph dispatchers*, which are objects that
@@ -71,21 +71,21 @@ Next, we'll create a dispatcher for our evaluation function::
 Finally, we define the behavior of ``eval_graph`` for different markers::
 
     >>> @eval_graph.when(Sum)
-    ... def eval_sum(dispgraph):
+    ... def eval_sum(dispgraph, **kw):
     ...     marker_graph = dispgraph.marker_graph()
     ...     left = eval_graph(marker_graph['a'])
     ...     right = eval_graph(marker_graph['b'])
     ...     return left + right
 
     >>> @eval_graph.when(Prod)
-    ... def eval_prod(dispgraph):
+    ... def eval_prod(dispgraph, **kw):
     ...     marker_graph = dispgraph.marker_graph()
     ...     left = eval_graph(marker_graph['a'])
     ...     right = eval_graph(marker_graph['b'])
     ...     return left * right
 
     >>> @eval_graph.when(Val)
-    ... def eval_val(dispgraph):
+    ... def eval_val(dispgraph, **kw):
     ...     return dispgraph.marker.value
 
 Now we can create a graph of markers, and evaluate it::
@@ -124,7 +124,7 @@ Traversers
 
 ``travesty`` includes a large collection of ``Marker``s for working with graphs
 that describe python objects. It also includes four ``GraphDispatcher``s for
-operating on these graphs: ``traverse``, ``validate``, ``dictify``, and
+operating on these graphs: ``graphize``, ``validate``, ``dictify``, and
 ``undictify``. Finally, it has some tools for quickly making graphs about your
 own objects.
 
@@ -198,9 +198,9 @@ We can use these to control the four core dispatchers.
 Traversal
 ---------
 
-The ``traverse`` dispatcher creates a vertigo graph from an object::
+The ``graphize`` dispatcher creates a vertigo graph from an object::
 
-    >>> print(vg.ascii_tree(tv.traverse(blog_typegraph, blog), sort=True))
+    >>> print(vg.ascii_tree(tv.graphize(blog_typegraph, blog), sort=True))
     root: 'The TTB Blog' - 3 posts
       +--posts: [Post by dplepage at 2014-01-15 13:00:00, Post by dplepage at 2014-01-16 12:00:00, Post by bdarklighter at 2014-01-17 14:00:00]
       |  +--0: Post by dplepage at 2014-01-15 13:00:00
@@ -217,10 +217,10 @@ The ``traverse`` dispatcher creates a vertigo graph from an object::
       |     +--timestamp: datetime.datetime(2014, 1, 17, 14, 0)
       +--title: 'The TTB Blog'
 
-Travesty provides ``traverse`` implementations for all of its ``Marker`` types.
+Travesty provides ``graphize`` implementations for all of its ``Marker`` types.
 In the example above, the ``BlogPostMarker`` and ``BlogMarker`` nodes cause
-``traverse`` to visit the items within each object according to the typegraph,
-while the ``List`` node causes ``traverse`` to visit each element of the blog's
+``graphizr`` to visit the items within each object according to the typegraph,
+while the ``List`` node causes ``graphize`` to visit each element of the blog's
 ``.posts`` list.
 
 Validation
@@ -302,7 +302,7 @@ The ``dictify`` traverser turns python objects into serializable structures::
 Shorthand
 =========
 
-Writing out the above typegraphs is a lot of extra typing, so Travesty also
+Writing out the above typegraphs is a lot of extra typing, so travesty also
 provides a helper type ``SchemaObj``. Subclassing ``SchemaObj`` and providing
 the ``field_types`` attribute lets your type automatically produce its own
 typegraph. Thus, the above examples could have been shortened::

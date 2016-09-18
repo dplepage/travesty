@@ -1,21 +1,21 @@
 import vertigo as vg
 
-from .base import Marker, to_typegraph
-from .base import traverse, validate, dictify, undictify
-from .invalid import Invalid, InvalidAggregator
+from .base import Marker, to_typegraph, IGNORE, aggregating_errors
+from .base import graphize, validate, dictify, clone, traverse
+from .invalid import Invalid
 
 class Tuple(Marker):
     '''The following docstring is ENTIRELY SUSPECT. TODO: Fix it.
 
     Dictifier for tuples.
 
-    >>> from . import Complex, Int
+    >>> from . import Complex, Int, undictify
     >>> t = Tuple.mkgraph((Int(), Complex()))
     >>> dictify(t, (2, 3j))
     (2, 3j)
     >>> undictify(t, (7, 8+2j))
     (7, (8+2j))
-    >>> print(vg.ascii_tree(traverse(t, ("7", "8+2j")), sort=True))
+    >>> print(vg.ascii_tree(graphize(t, ("7", "8+2j")), sort=True))
     root: ('7', '8+2j')
       +--0: '7'
       +--1: '8+2j'
@@ -69,8 +69,8 @@ class Tuple(Marker):
         self.field_names = field_names
         self.nfields = nfields
 
-    def of(self, **kwargs):
-        children = {key:to_typegraph(val) for key, val in kwargs.items()}
+    def of(self, **kw):
+        children = {key:to_typegraph(val) for key, val in kw.items()}
         return vg.PlainGraphNode(self, children)
 
     @classmethod
@@ -79,63 +79,43 @@ class Tuple(Marker):
         children = {str(k):val for k, val in enumerate(type_tuple)}
         return cls(nfields=len(type_tuple)).of(**children)
 
-
-@dictify.when(Tuple)
-def dictify_tuple(dispgraph, value, **kw):
+def apply_tuple(dispgraph, value, kw):
+    error_mode = kw.get("error_mode", IGNORE)
     names = dispgraph.marker.field_names
-    return tuple(dispgraph[name](v, **kw) for name,v in zip(names, value))
-
-@undictify.when(Tuple)
-def undictify_tuple(dispgraph, value, **kw):
-    names = dispgraph.marker.field_names
+    if error_mode == IGNORE:
+        return tuple(dispgraph[n](v, **kw) for n,v in zip(names, value))
     try:
         if len(value) != len(names):
-            raise Invalid('bad_len')
+            msg = "Expected iterable of length {}, not {}"
+            msg = msg.format(len(names), len(value))
+            raise Invalid('bad_len', msg=msg, fatal=True)
     except TypeError:
-        raise Invalid('not_iterable')
-    error_agg = InvalidAggregator(autoraise = kw.get('fail_early', False))
-    l = []
-    for (n, val) in zip(names, value):
-        with error_agg.checking_sub(n):
-            l.append(dispgraph[n](val, **kw))
-    error_agg.raise_if_any()
-    return tuple(l)
+        msg = "Expected iterable, not {}".format(type(value))
+        raise Invalid('not_iterable', msg, fatal=True)
+    with aggregating_errors(error_mode) as agg:
+        l = []
+        for (n, val) in zip(names, value):
+            with agg.checking_sub(n):
+                l.append(dispgraph[n](val, **kw))
+        return tuple(l)
 
-@validate.when(Tuple)
-def validate_tuple(dispgraph, value, **kw):
-    names = dispgraph.marker.field_names
-    try:
-        if len(value) != len(names):
-            raise Invalid('bad_len')
-    except TypeError:
-        raise Invalid('not_iterable')
-    error_agg = InvalidAggregator(autoraise = kw.get('fail_early', False))
-    for (n, val) in zip(names, value):
-        with error_agg.checking_sub(n):
-            dispgraph[n](val, **kw)
-    error_agg.raise_if_any()
+
+@clone.when(Tuple)
+def clone_tuple(dispgraph, value, **kw):
+    return apply_tuple(dispgraph, value, kw)
 
 @traverse.when(Tuple)
-def traverse_tuple(dispgraph, value, zipgraph=None, **kwargs):
-    def get(key):
-        if hasattr(value, key):
-            return getattr(value, key)
-        try:
-            key = int(key)
-        except:
-            raise AttributeError("'{}' object has no attribute '{}'".format(type(value), key))
-        return value[key]
-    edges = []
-    names = dispgraph.marker.field_names
-    for key in names:
-        subgraph = dispgraph[key]
-        subzip = zipgraph[key] if zipgraph else None
-        edges.append((key, subgraph(get(key), subzip, **kwargs)))
-    v = value
-    if zipgraph:
-        v = (v, zipgraph.value)
-    return vg.PlainGraphNode(v, edges)
+def traverse_tuple(dispgraph, value, **kw):
+    apply_tuple(dispgraph, value, kw)
 
+@graphize.when(Tuple)
+def graphize_tuple(dispgraph, value, **kw):
+    items = apply_tuple(dispgraph, value, kw)
+    names = dispgraph.marker.field_names
+    edges = zip(names, items)
+    if 'zipval' in dispgraph.extras:
+        value = (value, dispgraph.extras.zipval)
+    return vg.PlainGraphNode(value, edges)
 
 
 class NamedTuple(Tuple):
@@ -143,7 +123,7 @@ class NamedTuple(Tuple):
     Like Tuple, but for namedtuple instances:
 
     >>> from collections import namedtuple
-    >>> from . import Complex, Int
+    >>> from . import Complex, Int, undictify
     >>> WeirdPoint = namedtuple("WeirdPoint", ["num", "cnum"])
     >>> t = NamedTuple(WeirdPoint).of(num=Int(), cnum=Complex())
     >>> p = WeirdPoint(3, 6j)
@@ -153,7 +133,7 @@ class NamedTuple(Tuple):
     WeirdPoint(num=5, cnum=(2+1j))
     >>> validate(t, p)
     >>> g = vg.from_dict(dict(num="A Number", cnum="A Complex Number"))
-    >>> print(vg.ascii_tree(traverse(t, p, zipgraph=g)))
+    >>> print(vg.ascii_tree(graphize(t, p, extras_graphs=dict(zipval=g))))
     root: (WeirdPoint(num=3, cnum=6j), None)
       +--num: (3, 'A Number')
       +--cnum: (6j, 'A Complex Number')
@@ -171,15 +151,30 @@ class NamedTuple(Tuple):
         super(NamedTuple, self).__init__(field_names=tuple_type._fields)
         self.tuple_type = tuple_type
 
+
 @validate.when(NamedTuple)
 def validate_namedtuple(dispgraph, value, **kw):
     tuple_type = dispgraph.marker.tuple_type
     if not isinstance(value, tuple_type):
-        raise Invalid('type_error')
+        msg = "Expected {}, got {}".format(tuple_type, type(value))
+        raise Invalid('type_error', msg=msg, fatal=True)
     dispgraph.super(NamedTuple)(value, **kw)
 
 
-@undictify.when(NamedTuple)
-def undictify_namedtuple(dispgraph, value, **kw):
+@clone.when(NamedTuple)
+def clone_namedtuple(dispgraph, value, **kw):
     t = dispgraph.super(NamedTuple)(value, **kw)
     return dispgraph.marker.tuple_type._make(t)
+
+
+@dictify.when(NamedTuple)
+def df_namedtuple(dispgraph, value, **kw):
+    '''Explicit dictify to provide a plain tuple.
+
+    Without this, dictify would fall back on the clone() implementation and
+    would therefore return a namedtuple of the appropriate type.
+
+    It's ok that undictify falls back on clone, because cloning a plain tuple
+    actually will create an appropriate namedtuple.
+    '''
+    return dispgraph.super(NamedTuple)(value, **kw)

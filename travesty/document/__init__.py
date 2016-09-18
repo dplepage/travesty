@@ -1,7 +1,8 @@
 
 '''
 
->>> from travesty import String, dictify, undictify, traverse, validate, Optional
+>>> from travesty import String, Optional
+>>> from travesty import dictify, undictify, traverse, validate, graphize
 >>> import vertigo as vg
 >>> class Node(Document):
 ...     # field_types is a fn because python lacks recursive class definitions
@@ -22,70 +23,26 @@ You can create two nodes that point to each other:
 >>> n2 = Node(u"node2", u"Second", next=n1)
 >>> n1.next = n2
 
-Dictifying without passing in a storage pit behaves just like dictfying a any
-other recursive SchemaObj, i.e. it overflows the stack:
+Dictify will only serialize any given document once - when there are multiple
+occurences of the same document, all the other occurrences will serialize just
+to {'uid':doc.uid}. This means you can dictify recursive objects:
 
->>> dictify(Node, n1)
-Traceback (most recent call last):
-    ...
-RuntimeError: maximum recursion depth exceeded
-
-However, if pass in a dictionary called doc_storage, then dictifying will only
-return {'uid':uid}, and the doc_storage dict will be filled with the encountered
-documents:
-
->>> store = {}
->>> dictify(Node, n1, doc_storage=store)
-{'uid': u'node1'}
->>> n1_d = store['node1']
->>> n2_d = store['node2']
->>> n1_d == dict(uid='node1', next=dict(uid='node2'), name="First")
-True
->>> n2_d == dict(uid='node2', next=dict(uid='node1'), name=u"Second")
+>>> s = dictify(Node, n1)
+>>> s == {
+... 'uid': 'node1',
+... 'name': 'First',
+... 'next': {
+...     'uid': 'node2',
+...     'name': 'Second',
+...     'next': {'uid': 'node1'}
+... }}
 True
 
-Then you can undictify them with a DocSet:
 
->>> loader = DocSet()
->>> node1 = loader.load(Node, n1_d)
->>> node1.name
-u'First'
-
-After loading just node1, its next will be an unloaded reference to node2:
-
->>> node1.next.uid
-u'node2'
->>> node1.next.loaded
-False
->>> node1.next.name
-Traceback (most recent call last):
-    ...
-UnloadedDocumentException: <Unloaded Node: node2>
-
-But after loading node2, node1.next will be loaded (and will be node2):
-
->>> node2 = loader.load(Node, n2_d)
->>> node1.next.loaded
-True
->>> node1.next.name
-u'Second'
->>> node1.next is node2
-True
->>> node1.next.next is node1
-True
-
-validate and traverse will follow docrefs; be careful not to use them on
-recursive structures.
-
->>> try:
-...     validate(Node, node1)
-... except RuntimeError as e:
-...     assert str(e).startswith("maximum recursion depth exceeded")
-... else:
-...     raise Exception("That should have failed.")
->>> node2.next = None
->>> validate(Node, node1)
->>> print(vg.ascii_tree(traverse(Node, node1), sort=True))
+>>> validate(Node, n1)
+>>> n2.next = None
+>>> validate(Node, n1) # but now it won't.
+>>> print(vg.ascii_tree(graphize(Node, n1), sort=True))
 root: Node(u'node1', u'First')
   +--name: u'First'
   +--next: Node(u'node2', u'Second')
@@ -99,8 +56,8 @@ root: Node(u'node1', u'First')
 You can also create a DocSet from existing documents, but the DocSet will
 NOT automatically search for other referenced documents:
 
->>> docset = DocSet([node1])
->>> docset[Node, 'node1'] is node1
+>>> docset = DocSet([n1])
+>>> docset[Node, 'node1'] is n1
 True
 >>> (Node, 'node2') in docset
 False
@@ -109,13 +66,13 @@ True
 
 You can add other documents explicitly by calling add:
 
->>> docset.add(node2)
->>> docset[Node, 'node2'] is node2
+>>> docset.add(n2)
+>>> docset[Node, 'node2'] is n2
 True
 
 This will fail if a document with that id is already in the set:
 
->>> docset.add(node2)
+>>> docset.add(n2)
 Traceback (most recent call last):
     ...
 ValueError: Duplicate uid node2 for type <class 'travesty.document.Node'>

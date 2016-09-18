@@ -5,7 +5,7 @@ import vertigo as vg
 from travesty import Int, List, String, SchemaMapping, UniMapping, Wrapper
 from travesty import StrMapping
 from travesty import Marker, unwrap, core_marker, to_typegraph, make_dispatcher
-from travesty import dictify, undictify, traverse, validate, Invalid, Optional
+from travesty import dictify, undictify, graphize, validate, Invalid, Optional
 from travesty.dispatch_graph import DispatchGraph
 
 from helpers import expecting, match_asc
@@ -55,7 +55,7 @@ def test_invalid():
 def test_zipgraph():
     g = List().of(sub=Int())
     g2 = vg.from_dict(dict(_self="A List", sub="Some Element"))
-    g3 = traverse(g, [1,2,3], zipgraph=g2)
+    g3 = graphize(g, [1,2,3], extras_graphs={'zipval':g2})
     match_asc(g3, '''
         root: ([1, 2, 3], 'A List')
           +--0: (1, 'Some Element')
@@ -66,7 +66,7 @@ def test_zipgraph():
     g = Optional.wrap(UniMapping().of(String(), Int()))
     g2 = vg.from_dict(dict(_self="The map", key="A Key", val="A Value"))
     val = OrderedDict([('foo', 12), ('bar', 14)])
-    g3 = traverse(g, val, zipgraph=g2)
+    g3 = graphize(g, val, extras_graphs={'zipval':g2})
     match_asc(g3, '''
         root: (OrderedDict([('foo', 12), ('bar', 14)]), 'The map')
           +--key_0: ('foo', 'A Key')
@@ -74,7 +74,7 @@ def test_zipgraph():
           +--value_0: (12, 'A Value')
           +--value_1: (14, 'A Value')
     ''')
-    g3 = traverse(g, None, zipgraph=g2)
+    g3 = graphize(g, None, extras_graphs={'zipval':g2})
     match_asc(g3, '''
         root: (None, 'The map')
     ''')
@@ -82,16 +82,36 @@ def test_zipgraph():
     g = Optional.wrap(StrMapping().of(Int()))
     g2 = vg.from_dict(dict(_self="The map", sub="A Value"))
     val = OrderedDict([('foo', 12), ('bar', 14)])
-    g3 = traverse(g, val, zipgraph=g2)
+    g3 = graphize(g, val, extras_graphs={'zipval':g2})
     match_asc(g3, '''
         root: (OrderedDict([('foo', 12), ('bar', 14)]), 'The map')
           +--bar: (14, 'A Value')
           +--foo: (12, 'A Value')
     ''')
-    g3 = traverse(g, None, zipgraph=g2)
+    g3 = graphize(g, None, extras_graphs={'zipval':g2})
     match_asc(g3, '''
         root: (None, 'The map')
     ''')
+
+def test_extras_graphs():
+    show_extras = dictify.sub()
+    @show_extras.when(Int)
+    def show_extras_int(dispgraph, value, **kw):
+        return (dispgraph.extras.foo, dispgraph.extras.get('bar'))
+    x = show_extras(Int(), 1, extras_graphs=dict(foo=vg.PlainGraphNode(1)))
+    assert x == (1, None)
+    g = dict(
+        foo=vg.from_flat({
+            'sub': 'fooval',
+        }),
+        bar = vg.from_flat({
+            'sub': 'barval',
+        }))
+    x = show_extras(List().of(Int()), [1,2,3], extras_graphs=g)
+    assert x == [('fooval', 'barval')]*3
+    # foo is required, so fail without it:
+    with expecting(AttributeError):
+        x = show_extras(List().of(Int()), [1,2,3])
 
 def test_base_validate():
     validate(Marker(), 12)
@@ -132,7 +152,7 @@ def test_manipulation():
           +--y: <Int>
     ''')
     assert dispgraph.disp is d2
-    assert dispgraph.value == (typegraph.value, d2), dispgraph.value
+    assert dispgraph.value == (typegraph.value, d2, {}), dispgraph.value
 
     match_asc(parentgraph.marker_graph(), '''
         root: <Bar(SchemaMapping)>
@@ -159,8 +179,6 @@ def test_manipulation():
     with expecting(KeyError):
         rgraph['y']
 
-
-test_manipulation()
 
 def test_super():
     s = undictify.sub()
@@ -211,16 +229,16 @@ def test_superparent():
     d1 = make_dispatcher()
     d2 = d1.sub()
     @d1.when(Foo)
-    def d1_foo(dispgraph):
+    def d1_foo(dispgraph, **kw):
         return "d1_foo"
     @d1.when(Bar)
-    def d1_bar(dispgraph):
+    def d1_bar(dispgraph, **kw):
         return "d1_bar " + dispgraph.super(Bar)()
     @d2.when(Foo)
-    def d2_foo(dispgraph):
+    def d2_foo(dispgraph, **kw):
         return "d2_foo " + dispgraph.parent(d2)()
     @d2.when(Bar)
-    def d2_bar(dispgraph):
+    def d2_bar(dispgraph, **kw):
         return ["d2_bar "+dispgraph.parent(d2)(), "d2_bar "+dispgraph.super(Bar)()]
 
     parent_super, super_parent = d2(Bar())
@@ -234,10 +252,10 @@ def test_doublesuper():
     class Baz(Bar): pass
     d1 = make_dispatcher()
     @d1.when(Foo)
-    def d1_foo(dispgraph):
+    def d1_foo(dispgraph, **kw):
         return "d1_foo"
     @d1.when(Bar)
-    def d1_bar(dispgraph):
+    def d1_bar(dispgraph, **kw):
         return "d1_bar " + dispgraph.super(Bar)()
 
     assert d1(Baz()) == 'd1_bar d1_foo'

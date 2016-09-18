@@ -222,7 +222,7 @@ as follows::
     >>> from email.utils import parseaddr, formataddr
 
     >>> @tv.undictify.when(EmailAddrMarker)
-    ... def udf_email_addr(d, s):
+    ... def udf_email_addr(d, s, **kw):
     ...     try:
     ...         name, email = parseaddr(s)
     ...     except TypeError:
@@ -249,7 +249,7 @@ Dispatchers for which no function is defined will raise an exception::
 We can fix this by making sure to define these::
 
     >>> @tv.dictify.when(EmailAddrMarker)
-    ... def df_email_addr(d, addr):
+    ... def df_email_addr(d, addr, **kw):
     ...     return formataddr([addr.name, addr.email])
 
     >>> print(tv.dictify(EmailAddrMarker(), e))
@@ -288,7 +288,7 @@ But now we can add custom behavior to them::
 
     >>> @my_dictify.when(tv.Date)
     ... @my_undictify.when(tv.Date)
-    ... def passthrough_date(d, date):
+    ... def passthrough_date(d, date, **kw):
     ...     return date
 
 Now these two functions behave exactly like their parents except when
@@ -321,7 +321,7 @@ you might define::
 
     >>> class After1900(tv.Wrapper): pass
     >>> @tv.validate.when(After1900)
-    ... def check_1900(d, date):
+    ... def check_1900(d, date, **kw):
     ...     if date < datetime.date(1900, 1, 1):
     ...         raise tv.Invalid("date/too_early", "Date must be after 1900")
 
@@ -372,7 +372,7 @@ the altered typegraph::
 More Stuff
 ==========
 
-There are a lot of other cool things you can do with Travesty, such as using
+There are a lot of other cool things you can do with travesty, such as using
 the base dispatchers for single-argument type dispatch, or making graph-
 scripted algorithms by creating your own markers and dispatchers. Eventually I
 hope to add more documentation about these sub-parts. In the meantime, there

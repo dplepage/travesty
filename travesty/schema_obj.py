@@ -1,5 +1,3 @@
-from __future__ import absolute_import
-
 import vertigo as vg
 
 from .cantrips.immutable_dict import ImmutableDict
@@ -74,7 +72,9 @@ class SchemaObj(Traversable, Subclassable):
         for key, value in cls.field_types.items():
             cls.typegraph[key] = to_typegraph(value)
 
+    @classmethod
+    def subfields(self, *fields, **overlay):
+        return self.field_types.select_overlay(*fields, **overlay)
 
 # Force SchemaObj to set itself up
 SchemaObj.__subclass__()
-

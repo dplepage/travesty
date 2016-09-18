@@ -1,8 +1,8 @@
 import vertigo as vg
 
-from .base import Marker, traverse, validate, dictify, undictify
-from .base import to_typegraph
-from .invalid import Invalid, InvalidAggregator
+from .base import Marker, graphize, traverse, clone, mutate
+from .base import to_typegraph, aggregating_errors, IGNORE
+from .invalid import Invalid
 
 class List(Marker):
     '''Marker for homogenous lists.
@@ -12,10 +12,10 @@ class List(Marker):
 
     For example:
 
-    >>> from travesty import Int, Optional
+    >>> from travesty import Int, Optional, dictify, undictify, validate
     >>> l = List().of(Int())
 
-    >>> print(vg.ascii_tree(traverse(l, [1, 2, 3]), sort=True))
+    >>> print(vg.ascii_tree(graphize(l, [1, 2, 3]), sort=True))
     root: [1, 2, 3]
       +--0: 1
       +--1: 2
@@ -47,50 +47,51 @@ class List(Marker):
     def of(self, sub):
         return vg.PlainGraphNode(self, sub=to_typegraph(sub))
 
+
+def apply_list(dispgraph, value, kw):
+    '''Apply a dispgraph to each element in value.
+
+    This also handles error checking - if agg is not None, this will typecheck
+    value and recurse to each element within agg.checking_sub().
+    '''
+    error_mode = kw.get('error_mode', IGNORE)
+    if error_mode == IGNORE:
+        return [dispgraph['sub'](v, **kw) for v in value]
+    with aggregating_errors(error_mode) as agg:
+        if not isinstance(value, (list, tuple)):
+            msg = "Expected list, got {}".format(type(value).__name__)
+            raise Invalid("type_error", msg, fatal=True)
+        result = []
+        for i, v in enumerate(value):
+            with agg.checking_sub(str(i)):
+                result.append(dispgraph['sub'](v, **kw))
+        return result
+
+
+@graphize.when(List)
+def graphize_list(dispgraph, value, **kw):
+    edges = apply_list(dispgraph, value, kw)
+    edges = ((str(i), v) for (i,v) in enumerate(edges))
+    if 'zipval' in dispgraph.extras:
+        value = (value, dispgraph.extras.zipval)
+    return vg.PlainGraphNode(value, edges)
+
+
 @traverse.when(List)
-def traverse_list(dispgraph, value, zipgraph=None, **kwargs):
-    edges = []
-    subzip = zipgraph['sub'] if zipgraph else None
-    for i,val in enumerate(value):
-        key = str(i)
-        node = dispgraph['sub'](val, zipgraph=subzip, **kwargs)
-        edges.append((key,node))
-    v = value
-    if zipgraph:
-        v = (v, zipgraph.value)
-    return vg.PlainGraphNode(v, edges)
+def traverse_list(dispgraph, value, **kw):
+    apply_list(dispgraph, value, kw)
 
-@validate.when(List)
-def validate_list(dispgraph, value, **kwargs):
-    error_agg = InvalidAggregator(autoraise = kwargs.get('fail_early', False))
-    try:
-        iterator = iter(value)
-    except TypeError: # item isn't iterable!
-        raise Invalid("type_error", "Value is not iterable")
-    for i, item in enumerate(iterator):
-        with error_agg.checking_sub(str(i)):
-            dispgraph['sub'](item, **kwargs)
-    error_agg.raise_if_any()
 
-@undictify.when(List)
-def undictify_list(dispgraph, value, **kwargs):
-    # If _full_errors is True, then gather all errors from this and its
-    # children. Otherwise, just raise the first error we encounter.
-    error_agg = InvalidAggregator(autoraise = kwargs.get('fail_early', False))
-    try:
-        iterator = iter(value)
-    except TypeError: # item isn't iterable!
-        raise Invalid("type_error", "Value is not iterable")
-    result = []
-    for i, item in enumerate(iterator):
-        with error_agg.checking_sub(str(i)):
-            result.append(dispgraph['sub'](item, **kwargs))
-    error_agg.raise_if_any()
-    return result
+@mutate.when(List)
+def mutate_list(dispgraph, value, **kw):
+    value[:] = apply_list(dispgraph, value, kw)
+    return value
 
-@dictify.when(List)
-def dictify_list(dispgraph, value, **kwargs):
-    return [dispgraph['sub'](x, **kwargs) for x in value]
+
+@clone.when(List)
+def clone_list(dispgraph, value, **kw):
+    return apply_list(dispgraph, value, kw)
+
 
 if __name__ == '__main__': # pragma: no cover
     import doctest

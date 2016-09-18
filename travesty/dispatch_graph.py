@@ -1,6 +1,6 @@
 import vertigo as vg
 
-from .cantrips.dispatcher import Dispatcher, DispatchSuper, SuperMarker
+from .cantrips.dispatcher import DispatchSuper, SuperMarker
 
 #  =================
 #  = DispatchGraph =
@@ -19,11 +19,12 @@ class DispatchGraph(object):
 
     .target - the object to dispatch on (any value or SuperMarker)
     .disp_target - the dispatcher to use (a Dispatcher or a DispatchSuper)
-    .value - a tuple of (.target, .disp_target)
+    .value - a tuple of (.target, .disp_target, .extras)
     .marker_graph() - the wrapped marker graph
+    .extras - a dictionary of extra values zipped to the marker graph
 
-    Subclasses must either provide .value OR both .target and .disp_target. The
-    other will be inferred automatically.
+    Subclasses must either provide .value OR all three of .target,
+    .disp_target, and .extras. The others will be inferred automatically.
 
     The .marker property exposes the marker value for this node, which is the
     same as .target unless .target is a SuperMarker, in which case .marker is
@@ -52,6 +53,15 @@ class DispatchGraph(object):
         return self.value[1]
 
     @property
+    def extras_graphs(self):
+        return self.value[2]
+
+    @property
+    def extras(self):
+        egs = self.extras_graphs.items()
+        return Extras({k:(g.value if g else None) for k,g in egs})
+
+    @property
     def disp(self):
         if isinstance(self.disp_target, DispatchSuper):
             return self.disp_target.disp
@@ -59,7 +69,7 @@ class DispatchGraph(object):
 
     @property
     def value(self):
-        return (self.target, self.disp_target)
+        return (self.target, self.disp_target, self.extras_graphs)
 
     @property
     def marker(self):
@@ -122,14 +132,24 @@ class DispatchGraph(object):
     def restrict(self, edge_names):
         return DispatchRestriction(self, edge_names)
 
-# Wraps a graph of Marker values plus a common dispatcher
-class DynamicDispatchGraph(DispatchGraph, vg.wrappers.GraphWrapper):
-    '''DispatchGraph that wraps a graph of Markers.'''
-    __slots__ = ('disp_target',)
 
-    def __init__(self, graph, disp_target):
+class Extras(dict):
+    def __getattr__(self, attr):
+        if attr not in self:
+            msg = "{!r} object has no attribute {!r}"
+            raise AttributeError(msg.format(self.__class__.__name__, attr))
+        return self[attr]
+
+
+# Wraps a graph of Marker values plus a common dispatcher
+class DynamicDispatchGraph(DispatchGraph, vg.GraphNode):
+    '''DispatchGraph that wraps a graph of Markers.'''
+    __slots__ = ('graph', 'disp_target', 'extras_graphs')
+
+    def __init__(self, graph, disp_target, extras_graphs=None):
         self.graph = graph
         self.disp_target = disp_target
+        self.extras_graphs = extras_graphs or {}
 
     def marker_graph(self):
         return self.graph
@@ -137,6 +157,16 @@ class DynamicDispatchGraph(DispatchGraph, vg.wrappers.GraphWrapper):
     @property
     def target(self):
         return self.graph.value
+
+    def key_iter(self):
+        return self.graph.key_iter()
+
+    def _get_child(self, key):
+        egs = self.extras_graphs.items()
+        kid_g = self.graph[key]
+        kid_ex = {k:(g.get_child(key,None) if g else None) for k,g in egs}
+        return DynamicDispatchGraph(kid_g, self.disp_target, kid_ex)
+
 
 if True: # pragma: no cover
     # Untested, experimental feature.
@@ -179,7 +209,8 @@ class DispatchOverlay(vg.ValueOverlay, DispatchGraph):
             target = graph.target
         if disp_target is None:
             disp_target = graph.disp_target
-        super(DispatchOverlay, self).__init__(graph, (target, disp_target))
+        val = (target, disp_target, graph.extras_graphs)
+        super(DispatchOverlay, self).__init__(graph, val)
 
     def marker_graph(self):
         return vg.ValueOverlay(self.graph.marker_graph(), self.target)

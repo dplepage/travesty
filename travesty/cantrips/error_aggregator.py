@@ -54,7 +54,7 @@ class NestedException(Exception):
     'No'
 
     >>> e = NestedException()
-    >>> e.add_own(ValueError('The value is wrong',))
+    >>> _ = e.add_own(ValueError('The value is wrong',))
     >>> print(e)
     The value is wrong
     >>> print(repr(e))
@@ -68,7 +68,7 @@ class NestedException(Exception):
     >>> 'Yes' if e else 'No'
     'Yes'
 
-    >>> e.add_own(TypeError('Why would you use this type?'))
+    >>> _ = e.add_own(TypeError('Why would you use this type?'))
     >>> print(e)
     The value is wrong, Why would you use this type?
     >>> print(repr(e))
@@ -79,8 +79,8 @@ class NestedException(Exception):
     NestedException: The value is wrong, Why would you use this type?
 
     >>> e = NestedException()
-    >>> e.add_own(ValueError('The value is wrong',))
-    >>> e.add_sub("foo", ValueError("foo is also wrong"))
+    >>> _ = e.add_own(ValueError('The value is wrong',))
+    >>> _ = e.add_sub("foo", ValueError("foo is also wrong"))
     >>> print(e)
     The value is wrong; foo: [foo is also wrong]
     >>> print(e[0])
@@ -96,12 +96,21 @@ class NestedException(Exception):
     the new exception will be merged into this one:
 
     >>> e2 = NestedException()
-    >>> e2.add_own(ValueError("Alternate value problem"))
-    >>> e2.add_sub("foo", TypeError("The type of foo is terrible!"))
-    >>> e2.add_sub("bar", BufferError("bar failed."))
-    >>> e.add_own(e2)
+    >>> _ = (e2
+    ...     .add_own(ValueError("Alternate value problem"))
+    ...     .add_sub("foo", TypeError("The type of foo is terrible!"))
+    ...     .add_sub("bar", BufferError("bar failed.")))
+    >>> _ = e.add_own(e2)
     >>> print(e)
     The value is wrong, Alternate value problem; bar: [bar failed.], foo: [foo is also wrong, The type of foo is terrible!]
+
+    You can also add multiple sub-errors at once with add_subs, but the order
+    will be arbitrary:
+
+    >>> e3 = NestedException()
+    >>> _ = e3.add_subs(foo=TypeError("bad type"), bar=BufferError("bar failed"))
+    >>> assert str(e3) in ["foo: [bad type], bar: [bar failed]", "bar: [bar failed], foo: [bad type]"]
+
 
     The .own_str() helper method returns a string representation of ONLY this
     error's messages:
@@ -129,16 +138,41 @@ class NestedException(Exception):
             return self.own_errors[item]
         return self.sub_errors[item]
 
+    def is_fatal(self):
+        '''Indicate if this error is fatal and should halt aggregation.
+
+        By default this is always false, but subclasses can override this. For
+        example, you might have a subclass that identifies certain types of
+        errors as blocking all further aggregation, in which case is_fatal
+        would check to see if any such errors are in self.own_errors.
+        '''
+        return False
+
     def add_own(self, exc):
         '''Add an exception to this element.'''
         if isinstance(exc, NestedException):
             self.merge(exc)
         else:
             self.own_errors.append(exc)
+        return self
+
+    def add_subs(self, **subs):
+        for key, exc in subs.items():
+            self.add_sub(key, exc)
+        return self
 
     def add_sub(self, key, exc):
         '''Add a sub-exception.'''
-        self.sub_errors.setdefault(key, type(self)()).add_own(exc)
+        self.add([key], exc)
+        return self
+
+    def add(self, keys, exc):
+        '''Add an exception at any depth.'''
+        if keys:
+            self.sub_errors.setdefault(keys[0], type(self)()).add(keys[1:], exc)
+        else:
+            self.add_own(exc)
+        return self
 
     def merge(self, other):
         '''Merge another NestedException into this one.'''
@@ -224,22 +258,26 @@ class ErrorAggregator(object):
     def own_error(self, err):
         '''Add a self-error.'''
         self.error.add_own(err)
-        if self.autoraise:
+        if self.autoraise or self.error.is_fatal():
             raise self.error
 
     def sub_error(self, key, err):
         '''Add a child-error.'''
-        self.error.add_sub(key, err)
-        if self.autoraise:
+        self.put_error([key], err)
+
+    def put_error(self, keys, err):
+        '''Add an error at any depth.'''
+        self.error.add(keys, err)
+        if self.autoraise or self.error.is_fatal():
             raise self.error
 
     @contextmanager
-    def checking(self):
+    def checking(self, *keys):
         '''Context manager for try-excepting tasks.'''
         try:
             yield
         except self.catch_type as e:
-            self.own_error(e)
+            self.put_error(keys, e)
 
     @contextmanager
     def checking_sub(self, key):

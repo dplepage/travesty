@@ -11,7 +11,7 @@ from .cantrips.error_aggregator import ErrorAggregator, NestedException
 class SingleInvalid(Exception):
     '''A leaf in the nested tree of Invalid exceptions.
 
-    In general, don't raise SingleInvalid directly - instead, raise Invalid
+    In general, don't raise SingleInvalid directly - instead, raise Invalid.
 
     self.err_id will be a string indicating the specific error, e.g. 'required'
     when a value is missing that shouldn't be, 'not_int' for a value that must
@@ -24,7 +24,7 @@ class SingleInvalid(Exception):
     external mapping from err_ids to descriptive strings.
 
     '''
-    def __init__(self, err_id=None, desc=None, **kwargs):
+    def __init__(self, err_id=None, desc=None, fatal=False, **kwargs):
         if kwargs:
             super(SingleInvalid, self).__init__(err_id, kwargs)
         else:
@@ -32,6 +32,7 @@ class SingleInvalid(Exception):
         self.desc = desc
         self.err_id = err_id
         self.kwargs = kwargs
+        self.fatal = fatal
 
     def __str__(self):
         bits = [self.err_id, self.desc]
@@ -49,10 +50,13 @@ class Invalid(NestedException):
 
     This is a NestedException where the own_errors are all SingleInvalids.
     '''
-    def __init__(self, err_id=None, desc=None, **kwargs):
+    def __init__(self, err_id=None, desc=None, fatal=False, **kwargs):
         super(Invalid, self).__init__()
         if err_id or desc or kwargs:
-            self.own_errors.append(SingleInvalid(err_id, desc, **kwargs))
+            self.own_errors.append(SingleInvalid(err_id, desc, fatal, **kwargs))
+
+    def is_fatal(self):
+        return any(e.fatal for e in self.own_errors)
 
     def as_graph(self):
         edges = {k:v.as_graph() for (k,v) in self.sub_errors.items()}

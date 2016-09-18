@@ -1,23 +1,29 @@
 PACKAGE = travesty
 
-WITH_DOCTEST = --with-doctest --doctest-extension=rst
-WITH_COVERAGE = --with-coverage --cover-branches --cover-inclusive --cover-erase --cover-package=${PACKAGE}
+WITH_COVERAGE = --cov=${PACKAGE}
 FILES = ${PACKAGE}/ tests/ README*.rst
-# Flags to make doctests work in python 2.X and python 3.X
-VERSION_FIX = --with-doctest-ignore-unicode --doctest-options='+IGNORE_EXCEPTION_DETAIL,+IGNORE_UNICODE'
 
-# Override to test a specific version, e.g. nosetests-2.7
-NOSETESTS?=nosetests
-COVERAGE?=coverage
+smoke27:
+	py.test2.7 -x ${FILES}
 
-smoke:
-	${NOSETESTS} -x ${WITH_DOCTEST} ${FILES} ${VERSION_FIX}
+smoke35:
+	py.test3.5 -x ${FILES}
 
-test:
-	${NOSETESTS} ${WITH_DOCTEST} ${WITH_COVERAGE} ${FILES} ${VERSION_FIX}
+test27:
+	py.test2.7 ${WITH_COVERAGE} ${FILES}
 
-html: test
-	${COVERAGE} html --include='${PACKAGE}/*'
+test35:
+	py.test3.5 ${WITH_COVERAGE} ${FILES}
+
+html27: test27
+	coverage2.7 html --include='${PACKAGE}/*'
+
+html35: test35
+	coverage3.5 html --include='${PACKAGE}/*'
+
+html: html27
+smoke: smoke27 smoke35
+test: test27 test35
 
 flakes:
 	pyflakes .

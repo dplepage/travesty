@@ -1,5 +1,6 @@
 from __future__ import unicode_literals
 from collections import Counter, namedtuple
+from functools import wraps
 
 
 def _merge_one(lists, tails):
@@ -93,7 +94,7 @@ class _BaseDispatcher(object):
                 return fn
         return self.get_default()
 
-    def call(self, val, *args, **kwargs):
+    def raw_call(self, val, *args, **kwargs):
         '''Invoke the dispatch target on val.
 
         The arguments to the function will be (self, val, *args, **kwargs).
@@ -105,9 +106,19 @@ class _BaseDispatcher(object):
             val = val[1]
         return fn(self, val, *args, **kwargs)
 
+    def call(self, *args, **kwargs):
+        return self.raw_call(*args, **kwargs)
+
     def __call__(self, val, *args, **kwargs):
         '''Synonym for self.call()'''
         return self.call(val, *args, **kwargs)
+
+
+def _resolve_dispatcher(disp_or_disp_wrapper):
+    if hasattr(disp_or_disp_wrapper, 'dispatch_mro'):
+        return disp_or_disp_wrapper
+    return _resolve_dispatcher(disp_or_disp_wrapper.dispatcher)
+
 
 class Dispatcher(_BaseDispatcher):
     '''Dispatcher that chooses a function based on the first argument.
@@ -292,8 +303,11 @@ class Dispatcher(_BaseDispatcher):
     def __init__(self, mapping=None, default=None, keyfn=None, parents=()):
         self.mapping = mapping.copy() if mapping else {}
         self._default = default
+        self._default_values = {}
+        self._default_factories = {}
         self.keyfn = keyfn
         if parents:
+            parents = [_resolve_dispatcher(p) for p in parents]
             self.dispatch_mro = (self,) + tuple(merge(p.dispatch_mro for p in parents))
             if self.keyfn is None:
                 self.keyfn = parents[0].keyfn
@@ -341,6 +355,28 @@ class Dispatcher(_BaseDispatcher):
     def sub(self):
         '''Create a new dispatcher with the same keyfn and self as a parent.'''
         return Dispatcher(parents=[self], keyfn=self.keyfn)
+
+    def apply_defaults(self, kwargs):
+        for dispatcher in self.dispatch_mro:
+            for key, val in dispatcher._default_values.items():
+                kwargs.setdefault(key, val)
+            for key, val in dispatcher._default_factories.items():
+                if key not in kwargs:
+                    kwargs[key] = val()
+        return kwargs
+
+    def call(self, *args, **kwargs):
+        kwargs = self.apply_defaults(kwargs)
+        return self.raw_call(*args, **kwargs)
+
+    def default_value(self, key, value):
+        self._default_values[key] = value
+        self._default_factories.pop(key, None)
+
+    def default_factory(self, key, value_fn):
+        self._default_factories[key] = value_fn
+        self._default_values.pop(key, None)
+
 
 class DispatchSuper(_BaseDispatcher):
     '''
@@ -399,8 +435,8 @@ class DispatchSuper(_BaseDispatcher):
 
     '''
     def __init__(self, above_disp, disp):
-        self.disp = disp
-        self.above_disp = above_disp
+        self.disp = _resolve_dispatcher(disp)
+        self.above_disp = _resolve_dispatcher(above_disp)
         self.dispatch_mro = slice_at(self.disp.dispatch_mro, self.above_disp)
 
     def _to_keys(self, val):
@@ -412,3 +448,104 @@ class DispatchSuper(_BaseDispatcher):
         if fn is None:
             raise NotImplementedError(self._to_keys(val))
         return fn(self.disp, val, *args, **kwargs)
+
+def wraps_dispatcher(disp):
+    '''
+    A decorator for wrapping dispatchers in functions.
+
+    This is especially useful when you want a dispatcher with default values.
+    For example, consider a dispatcher that adds a second argument to its first:
+
+    >>> add = Dispatcher()
+    >>> @add.when(int)
+    ... def add_int(add, value, addition):
+    ...     return value + addition
+
+    We can wrap this in a function that defaults additions to 1
+
+    >>> @wraps_dispatcher(add)
+    ... def add1(add, value, addition=1):
+    ...     return add(value, addition)
+    ...
+
+    This behaves just like the original dispatcher:
+
+    >>> add(4, 1)
+    5
+    >>> add1(4)
+    5
+
+    The first argument to the wrapping function is the wrapped dispatcher; this
+    makes it possible to proxy .sub() (see below)
+
+    It also proxies the original dispatcher's methods:
+
+    >>> @add1.default()
+    ... def add_int_castable(add, value, addition):
+    ...     return int(value) + addition
+    ...
+    >>> add('10', 1)
+    11
+    >>> add1('12')
+    13
+
+    Note that calling `add1.when` actually registered the handler on the
+    original `add` dispatcher.
+
+    It also proxies `Dispatcher.sub` correctly:
+
+    >>> add1_sub = add1.sub()
+    >>> @add1_sub.when(list)
+    ... def add_list_weirdly(add, value, addition):
+    ...     return 10 + addition if value else 20 + addition
+    ...
+    >>> add1_sub([True])
+    11
+    >>> add1([True])
+    Traceback (most recent call last):
+      ...
+    TypeError: int() argument must be a string or a number, not 'list'
+
+    In the above case, `add1_sub` defines additional behavior for lists, but the
+    parent dispatcher is unaffected.
+
+    It's possible to use dispatcher wrappers as explicit parents:
+
+    >>> add_new = Dispatcher(parents=(add1,))
+
+    But in doing so, you're only inheriting the dispatcher structure, not the
+    wrapper function:
+
+    >>> add_new(3)
+    Traceback (most recent call last):
+      ...
+    TypeError: add_int() missing 1 required positional argument: 'addition'
+
+    You can get the underlying dispatcher with `.dispatcher` and the underlying
+    wrapper function with `.fn`, so if you want to explicitly parent and rewrap
+    you could do:
+
+    >>> add_new_disp = Dispatcher(parents=(add1,))
+    >>> add_new = wraps_dispatcher(add_new_disp)(add1.fn)
+    >>> add_new(3)
+    4
+    '''
+    def wrap(fn):
+        @wraps(fn)
+        def newfn(*a, **kw):
+            return fn(disp, *a, **kw)
+        newfn.dispatcher = disp
+        newfn.fn = fn
+        newfn.get_default = disp.get_default
+        newfn.dispatch = disp.dispatch
+        newfn.register = disp.register
+        newfn.when = disp.when
+        newfn.set_default = disp.set_default
+        newfn.default = disp.default
+        newfn.call = newfn
+        def sub(*a, **kw):
+            subdisp = disp.sub(*a, **kw)
+            return wraps_dispatcher(subdisp)(fn)
+        newfn.sub = sub
+        return newfn
+    return wrap

@@ -1,13 +1,18 @@
 import sys
 if sys.version >= '3': # pragma: no cover
     unicode = str
-    basestring = str
 
 from uuid import uuid4
 
-from travesty import SchemaObj, String, Invalid, InvalidAggregator, ObjectMarker
-from travesty import dictify, undictify, validate, traverse
+from travesty import SchemaObj, String, Invalid
+from travesty import clone, mutate, traverse, graphize, dictify, undictify
+from travesty.base import aggregating_errors, IGNORE
 from travesty.cantrips import empty_instance
+from travesty.schema import apply_schema
+from travesty.object_marker import extract_obj
+
+
+from .docset import DocSet, DoubleLoadException
 
 def make_uid():
     '''Generate a (probably) unique id.'''
@@ -18,10 +23,6 @@ class UnloadedDocumentException(Exception):
     def __init__(self, document, *a, **kw):
         self.document = document
         super(UnloadedDocumentException, self).__init__(document, *a, **kw)
-
-class DoubleLoadException(Exception):
-    '''Raised if a loaded document is loaded again.'''
-    pass
 
 class Document(SchemaObj):
     '''Document protocol for non-tree object graphs.
@@ -55,7 +56,6 @@ class Document(SchemaObj):
 
     def __init__(self, uid=None, **attrs):
         self.loaded = True
-        super(Document, self).__init__()
         # If uid is not specified, generate one randomly
         if uid is None:
             uid = make_uid()
@@ -120,95 +120,177 @@ class Document(SchemaObj):
     def __repr__(self):
         if self.loaded:
             return self._loaded_repr()
-        return str(self)
+        return unicode(self)
 
 
-@dictify.when(Document.marker_cls)
-def df_document(dispgraph, doc, doc_storage=None, no_doc_kids=False, **kwargs):
-    '''Dictify a document.
+clone.default_factory("in_docset", lambda: DocSet())
 
-    The behavior is different depending on whether doc_storage kwarg is None.
+@clone.when(Document.marker_cls)
+def clone_document(dispgraph, doc, **kwargs):
+    '''Clone a Document.
 
-    If it is, then this behaves just like dictifying a SchemaObj - the document
-    is serialized to a dictionary, which is returned.
+    This creates an exact duplicate of the document AND all child documents it
+    encounters. However, internally it tracks documents it's already cloned, so
+    if the same document appears twice it won't be copied twice.
 
-    If doc_storage is not None, then it should be a dictionary mapping uids to
-    serialized Documents. In this case, this function will always return
-    {'uid':doc.uid}, but if doc.uid isn't already in doc_storage then the
-    serialized dictionary of this object will be added to it as a side effect.
+    If a traverse_docs extras graph is provided, then documents won't be cloned
+    except where traverse_docs is True.
 
-    Thus, if you have a complex structure of Documents, dictifying the root with
-    no doc_storage may give you multiple serialized copies of the same object,
-    while serializing with doc_storage={} will populate doc_storage with
-    serialized versions of each object, leaving only {'uid':<uid>} where
-    sub-documents are present.
+    Specify new_uids=True if you want clone to generate new uids for cloned
+    documents; specify in_docset=<some DocSet> if you want the cloned documents
+    to be added to a docset.
 
+    Note that if you specify new_uids=False and pass in a docset that already
+    contains some of these documents, those documents will NOT be cloned
     '''
-    # unloaded doc -> {"uid":doc.uid}
-    if not doc.loaded or no_doc_kids == "internal":
-        return dict(uid=doc.uid)
-    # doc already stored -> {"uid": doc.uid}
-    if doc_storage is not None and doc.uid in doc_storage:
-        return dict(uid=doc.uid)
-    if doc_storage is not None: # place a marker in here in case of recursion
-        doc_storage[doc.uid] = dict(uid=doc.uid)
-    superdisp = dispgraph.super(Document.marker_cls)
-    if no_doc_kids:
-        no_doc_kids = "internal"
-    result = superdisp(doc, doc_storage=doc_storage, no_doc_kids=no_doc_kids, **kwargs)
-    if doc_storage is not None:
-        # When using storage, always return just {'uid':doc.uid}
-        doc_storage[doc.uid] = result
-        return dict(uid=doc.uid)
-    # without storage, return full result
-    return result
+    new_uids = kwargs.get('new_uids', False)
+    docset = kwargs['in_docset']
+    # If traverse_docs says not to continue, stop here
+    if 'traverse_docs' in dispgraph.extras:
+        if not dispgraph.extras.traverse_docs:
+            return doc
+    # Check type here if needed
+    if kwargs.get('error_mode', IGNORE) != IGNORE:
+        marker = dispgraph.marker
+        if not isinstance(doc, marker.target_cls):
+            name = type(doc).__name__
+            expected = marker.target_cls.__name__
+            msg = "Expected {}, got {}".format(expected, name)
+            raise Invalid("type_error", msg)
+    uid = make_uid() if new_uids else doc.uid
+    key = (type(doc), uid)
+    if key in docset:
+        return docset[key]
+    new_doc = docset.create(type(doc), uid)
+    if not doc.loaded:
+        # Nothing else to copy if the doc is unloaded
+        return new_doc
+    # Load a dict of the results of all the child calls
+    attrs = extract_obj(dispgraph, doc, kwargs)
+    new_doc.load(**attrs)
+    return new_doc
 
 
+# Inherits a default in_docset from clone
 @undictify.when(Document.marker_cls)
-def udf_document(dispgraph, value, in_docset=None, **kwargs):
-    if not isinstance(value, dict):
-        raise Invalid('type_error', "Expected dict, got {}".format(type(value)))
-    if 'uid' not in value:
-        raise Invalid('missing_key:uid', "Document has no uid.")
+def udf_document(dispgraph, value, **kwargs):
+    error_mode = kwargs.get('error_mode', IGNORE)
+    # Check type here if needed
+    if error_mode != IGNORE:
+        if not isinstance(value, dict):
+            name = type(value).__name__
+            msg = "Expected dict, got {}".format(name)
+            raise Invalid("type_error", msg)
+        if 'uid' not in value:
+            # TODO standardize the invalid naming pattern
+            raise Invalid('missing_key:uid', "Document has no uid.")
     uid = value['uid']
     doctype = dispgraph.marker.target_cls
-    if in_docset is not None:
-        doc = in_docset.get_or_create(doctype, uid)
-    else:
-        doc = doctype._create_unloaded(uid)
+    in_docset = kwargs['in_docset']
+    doc = in_docset.get_or_create(doctype, uid)
     # If the input has no keys besides 'uid', and the doctype expects more, then
     # this is an unloaded document and we should just return it
     if (len(value) == 1) and len(doctype.field_types) > 1:
         return doc
     # Otherwise, we need to populate it.
-    error_agg = InvalidAggregator(autoraise = kwargs.get('fail_early', False))
-    with error_agg.checking():
-        # Need to jump over ObjectMarker and go straight to Schema so we get a
-        # dictionary back
-        # TODO could probably refactor ObjectMarker and/or Schema to avoid this
-        result = dispgraph.super(ObjectMarker)(value, in_docset=in_docset, **kwargs)
-    extra_keys = set(value.keys()) - set(dispgraph.key_iter())
-    if extra_keys:
-        error_agg.own_error(Invalid('unexpected_fields', keys=extra_keys))
-    error_agg.raise_if_any()
-    doc.load(**result)
+    with aggregating_errors(error_mode):
+        attrs = apply_schema(dispgraph, value, kwargs)
+        if error_mode != IGNORE:
+            # TODO this duplicates logic in doc.load - should maybe combine?
+            extra_keys = set(value.keys()) - set(dispgraph.key_iter())
+            if extra_keys:
+                raise Invalid('unexpected_fields', keys=extra_keys)
+    doc.load(**attrs)
     return doc
 
-@validate.when(Document.marker_cls)
-def vd_document(dispgraph, doc, no_doc_kids=False, **kwargs):
-    doctype = dispgraph.marker.target_cls
-    if not isinstance(doc, doctype):
-        raise Invalid("type_error", "Expected {}, got {}".format(doctype, type(doc)))
-    # This actually works, amusingly enough
-    traverse_document(dispgraph, doc, no_doc_kids=no_doc_kids, **kwargs)
+
+mutate.default_factory("_tv_docs_processed", lambda: set())
+
+@mutate.when(Document.marker_cls)
+def mutate_document(dispgraph, doc, **kwargs):
+    '''Mutate a Document.
+
+    This will only mutate a given Document once, even if said document appears
+    multiple times during the recursion.
+
+    As with clone(), you can pass `traverse_docs` to explicitly control when
+    this will descend into a given document.
+    '''
+    docs_processed = kwargs['_tv_docs_processed']
+    # If we've already mutated this doc, we're done no matter what.
+    if doc in docs_processed:
+        return doc
+    # If traverse_docs says not to enter this doc, we're also done.
+    if 'traverse_docs' in dispgraph.extras:
+        if not dispgraph.extras.traverse_docs:
+            return doc
+    docs_processed.add(doc)
+    superdisp = dispgraph.super(Document.marker_cls)
+    return superdisp(doc, **kwargs)
+
+
+dictify.default_factory('_tv_docs_processed', lambda: set())
+
+@dictify.when(Document.marker_cls)
+def dictify_document(dispgraph, doc, **kwargs):
+    '''Dictify for Document.
+
+    This has the same behavior as clone, except that where clone would create
+    a new object, this instead returns a complete serialized object, and where
+    clone would return the original object, this instead returns
+    dict(uid=doc.uid)
+    '''
+    docs_processed = kwargs['_tv_docs_processed']
+    # If we've already done this doc, just return a stub
+    if doc in docs_processed:
+        return dict(uid=doc.uid)
+    # If traverse_docs says not to enter this doc, just return a stub
+    if 'traverse_docs' in dispgraph.extras:
+        if not dispgraph.extras.traverse_docs:
+            return dict(uid=doc.uid)
+    docs_processed.add(doc)
+    superdisp = dispgraph.super(Document.marker_cls)
+    return superdisp(doc, **kwargs)
+
+graphize.default_factory("_tv_docs_cache", lambda: {})
+
+@graphize.when(Document.marker_cls)
+def graphize_document(dispgraph, doc, **kwargs):
+    cache = kwargs['_tv_docs_cache']
+    if doc in cache:
+        # Already done this one
+        return cache[doc]
+    # Restrict to uid if the doc isn't loaded OR we're not supposed to traverse.
+    superdisp = dispgraph.super(Document.marker_cls)
+
+    if not doc.loaded:
+        superdisp = superdisp.restrict(['uid'])
+    elif 'traverse_docs' in dispgraph.extras:
+        if not dispgraph.extras.traverse_docs:
+            superdisp = superdisp.restrict(['uid'])
+    cache[doc] = superdisp(doc, **kwargs)
+    return cache[doc]
+
+
+
+traverse.default_factory("_tv_docs_processed", lambda: set())
 
 @traverse.when(Document.marker_cls)
-def traverse_document(dispgraph, doc, zipgraph=None, no_doc_kids=False, **kwargs):
+def traverse_document(dispgraph, doc, **kwargs):
+    docs_processed = kwargs['_tv_docs_processed']
+    # If we've already done this doc, there's nothing to d
+    if doc in docs_processed:
+        return
+    # If we don't traverse here, then we're done
+    if 'traverse_docs' in dispgraph.extras:
+        if not dispgraph.extras.traverse_docs:
+            return
+    docs_processed.add(doc)
     superdisp = dispgraph.super(Document.marker_cls)
-    if not doc.loaded or no_doc_kids == "internal":
+    # We use getattr so that if you pass a non-document in we won't break until
+    # superdisp (which should already handle exceptions)
+    if not getattr(doc, 'loaded', False):
         # Unloaded doc: only traverse uid
-        return superdisp.restrict(['uid'])(doc, zipgraph=zipgraph, no_doc_kids=no_doc_kids, **kwargs)
-    if no_doc_kids:
-        no_doc_kids = "internal"
-    # Treat loaded docs like any other SchemaObj
-    return superdisp(doc, zipgraph=zipgraph, no_doc_kids=no_doc_kids, **kwargs)
+        return superdisp.restrict(['uid'])(doc, **kwargs)
+    # traverse normally
+    return superdisp(doc, **kwargs)

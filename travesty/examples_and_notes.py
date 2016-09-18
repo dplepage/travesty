@@ -12,7 +12,7 @@ import datetime
 import textwrap
 
 import travesty as tv
-from travesty import traverse, validate, dictify, undictify
+from travesty import graphize, validate, dictify, undictify
 
 import vertigo as vg
 
@@ -95,8 +95,8 @@ assert b2.title == blog.title
 assert all(p1.text == p2.text for (p1, p2) in zip(b2.posts,blog.posts))
 
 
-# traverse wraps the whole thing in a graph
-assert vg.ascii_tree(traverse(Blog, blog), sort=True) == '''
+# graphize wraps the whole thing in a graph
+assert vg.ascii_tree(graphize(Blog, blog), sort=True) == '''
 root: 'The TTB Blog' - 3 posts
   +--posts: [Post by dplepage at 2014-01-15 13:00:00, Post by dplepage at 2014-01-16 12:00:00, Post by bdarklighter at 2014-01-17 14:00:00]
   |  +--0: Post by dplepage at 2014-01-15 13:00:00

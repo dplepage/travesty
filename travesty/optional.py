@@ -1,54 +1,53 @@
 import vertigo as vg
 
-from . import Wrapper, traverse, dictify, undictify, validate
+from . import Wrapper, graphize, clone, traverse
 
 class Optional(Wrapper):
     '''Wrapper that indicates the value could be None.
 
-    >>> from . import Int, List
+    >>> import travesty as tv
 
     None fails validation, won't always undictify, etc.
 
-    >>> validate(Int(), None)
+    >>> tv.validate(tv.Int(), None)
     Traceback (most recent call last):
         ...
     Invalid: type_error
-    >>> undictify(List().of(Int()), None)
+    >>> tv.undictify(tv.List().of(tv.Int()), None)
     Traceback (most recent call last):
         ...
     Invalid: type_error
 
     Wrapping it in Optional fixes this:
 
-    >>> validate(Optional.wrap(Int()), None)
-    >>> undictify(Optional.wrap(Int()), None) is None
+    >>> tv.validate(Optional.wrap(tv.Int()), None)
+    >>> tv.undictify(Optional.wrap(tv.Int()), None) is None
     True
 
     '''
     pass
 
-@traverse.when(Optional)
-def traverse_optional(dispgraph, value, zipgraph=None, **kwargs):
+@graphize.when(Optional)
+def graphize_optional(dispgraph, value, **kw):
     if value is None:
-        if zipgraph:
-            return vg.PlainGraphNode((value, zipgraph.value))
-        return vg.PlainGraphNode(value)
+        if 'zipval' in dispgraph.extras:
+            return vg.PlainGraphNode((None, dispgraph.extras.zipval))
+        return vg.PlainGraphNode(None)
     opt = dispgraph.marker
-    return dispgraph.for_marker(opt.marker)(value, zipgraph=zipgraph, **kwargs)
+    return dispgraph.for_marker(opt.marker)(value, **kw)
 
 
-@dictify.when(Optional)
-@undictify.when(Optional)
-def dfy_undfy_optional(dispgraph, value, **kwargs):
+@clone.when(Optional)
+def clone_optional(dispgraph, value, **kw):
     if value is None:
         return None
     opt = dispgraph.marker
-    return dispgraph.for_marker(opt.marker)(value, **kwargs)
+    return dispgraph.for_marker(opt.marker)(value, **kw)
 
 
-@validate.when(Optional)
-def validate_optional(dispgraph, value, **kwargs):
+@traverse.when(Optional)
+def traverse_optional(dispgraph, value, **kw):
     if value is None:
         return
     opt = dispgraph.marker
-    dispgraph.for_marker(opt.marker)(value, **kwargs)
+    dispgraph.for_marker(opt.marker)(value, **kw)

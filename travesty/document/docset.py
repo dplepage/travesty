@@ -1,6 +1,8 @@
 from travesty import undictify
 
-from .document import DoubleLoadException
+class DoubleLoadException(Exception):
+    '''Raised if a loaded document is loaded again.'''
+    pass
 
 
 class DocSet(object):

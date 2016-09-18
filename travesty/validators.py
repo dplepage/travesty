@@ -110,6 +110,108 @@ def InRange(low=None, high=None, marker=None):
         marker = infer_marker(val)
     return IsInRange(low, high).of(marker)
 
+class HasLength(Validator):
+    '''Require values to have a fixed length.
+
+    >>> HasLength(5).validate("hello")
+    >>> HasLength(3).validate([1,2,3])
+    >>> HasLength(2).validate(dict(x=1))
+    Traceback (most recent call last):
+        ...
+    Invalid: value_error/wrong_length - Expected length 2, not length 1.
+
+    This assumes the type has a len(), and that some other validator is ensuring
+    that.
+
+    >>> HasLength(2).validate(3)
+    Traceback (most recent call last):
+        ...
+    TypeError: object of type 'int' has no len()
+    '''
+    def __init__(self, length):
+        self.length = length
+
+    def validate(self, value, **kwargs):
+        l = len(value)
+        if l != self.length:
+            msg = "Expected length {}, not length {}.".format(self.length, l)
+            raise Invalid("value_error/wrong_length", msg)
+
+class HasLengthInRange(Validator):
+    '''Require values to have a fixed length.
+
+    >>> UpTo5 = HasLengthInRange(1, 5)
+    >>> UpTo5.validate({1})
+    >>> UpTo5.validate([1,2,3])
+    >>> UpTo5.validate('hello')
+    >>> UpTo5.validate([])
+    Traceback (most recent call last):
+        ...
+    Invalid: value_error/too_short - Length 0 is lower than minimum 1
+    >>> UpTo5.validate('this is too long')
+    Traceback (most recent call last):
+        ...
+    Invalid: value_error/too_long - Length 16 is higher than maximum 5
+    '''
+    def __init__(self, low=None, high=None):
+        self.low = low
+        self.high = high
+
+    def validate(self, value, **kwargs):
+        l = len(value)
+        if self.low is not None and l < self.low:
+            msg = "Length {} is lower than minimum {}".format(l, self.low)
+            raise Invalid("value_error/too_short", msg)
+        if self.high is not None and l > self.high:
+            msg = "Length {} is higher than maximum {}".format(l, self.high)
+            raise Invalid("value_error/too_long", msg)
+
+def StringOfLength(length=None, low=None, high=None, marker=String()):
+    '''Requires strings with a fixed length or a length in a range.
+
+    See HasLength and HasLengthInRange.
+
+    Note that this does not support e.g. lists because it returns a marker, not
+    a typegraph. You must use e.g. HasLength(5).wrap(List().of(Int())) to
+    require a list of exactly 5 integers.
+
+    >>> Str5 = StringOfLength(5)
+    >>> validate(Str5, "hello")
+    >>> validate(Str5, "hi")
+    Traceback (most recent call last):
+      ...
+    Invalid: value_error/wrong_length - Expected length 5, not length 2.
+    >>> validate(Str5, [1,2,3,4,5])
+    Traceback (most recent call last):
+      ...
+    Invalid: type_error
+    >>> Str1_3 = StringOfLength(low=1, high=3)
+    >>> validate(Str1_3, "hi")
+    >>> validate(Str1_3, "")
+    Traceback (most recent call last):
+      ...
+    Invalid: value_error/too_short - Length 0 is lower than minimum 1
+    >>> validate(Str1_3, "hello")
+    Traceback (most recent call last):
+      ...
+    Invalid: value_error/too_long - Length 5 is higher than maximum 3
+    >>> validate(Str1_3, [1,2])
+    Traceback (most recent call last):
+      ...
+    Invalid: type_error
+
+    >>> StringOfLength(length=2, low=1, high=3)
+    Traceback (most recent call last):
+      ...
+    ValueError: Cannot specify both length and low/high
+    '''
+    if length:
+        if (low, high) != (None, None):
+            raise ValueError("Cannot specify both length and low/high")
+        return HasLength(length).of(marker)
+    return HasLengthInRange(low, high).of(marker)
+
+
 class IsOneOf(Validator):
     '''Require values to come from a fixed list of options.
 

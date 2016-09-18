@@ -76,6 +76,17 @@ def test_construct():
     p = Point(-12,1)
     assert p.dictify() == plain_data
 
+def test_subfields():
+    assert Point.subfields("x", "y") == dict(
+        x = Point.field_types['x'],
+        y = Point.field_types['y'])
+    tmp = Optional.wrap(String())
+    sf = Point.subfields("label", x=tmp, z=tmp)
+    assert sf == dict(
+        label = Point.field_types['label'],
+        x = tmp,
+        z = tmp,
+    )
 
 class TwoPoints(BCSchemaObj):
     field_types = dict(a=Point, b=Point)

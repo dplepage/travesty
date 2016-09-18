@@ -1,12 +1,12 @@
 """
-Markers and core functions for dates, times, and datetimes.
+Markers and core functions for dates, times, datetimes, and timedeltas.
 
-All three types assume you're using the date, time, and datetime types from the
-datetime module.
+All four types assume you're using the types from the datetime module.
 
-This module exposes three Markers: DateTime, Date, and Time
+This module exposes several Markers: DateTime, Date, Time, and TimeDelta
 
-validate accepts only datetime, date, or time objects, respectively:
+validate accepts only datetime, date, time, or timedelta objects,
+respectively:
 
 >>> now = datetime.datetime.now()
 >>> validate(DateTime(), now)
@@ -27,8 +27,14 @@ Traceback (most recent call last):
 ...
 Invalid: type_error
 
+>>> validate(TimeDelta(), datetime.timedelta(minutes=5))
+>>> validate(TimeDelta(), now)
+Traceback (most recent call last):
+...
+Invalid: type_error
 
-Their dictify implementations use ISO 8601 format:
+
+The date/time dictify implementations use ISO 8601 format:
 
 >>> d = datetime.datetime(1776, 12, 25, 14, 21, 3, 100500)
 >>> dictify(DateTime(), d)
@@ -39,7 +45,6 @@ u'1776-12-25'
 u'14:21:03.100500'
 >>> dictify(DateTime(), d.replace(microsecond=0))
 u'1776-12-25T14:21:03'
-
 
 >>> undictify(DateTime(), u'1776-12-25T14:21:03.100500')
 datetime.datetime(1776, 12, 25, 14, 21, 3, 100500)
@@ -90,6 +95,24 @@ Traceback (most recent call last):
 Invalid: type_error
 
 
+TimeDelta just serializes as a triple of (days, seconds, microseconds):
+
+>>> dictify(TimeDelta(), datetime.timedelta(days=3.333))
+(3, 28771, 200000)
+>>> undictify(TimeDelta(), (3, 28771, 200000))
+datetime.timedelta(3, 28771, 200000)
+>>> undictify(TimeDelta(), (1,2,3,4))
+Traceback (most recent call last):
+...
+Invalid: value_error - Expected 3 items, not 4
+>>> undictify(TimeDelta(), "Not a delta")
+Traceback (most recent call last):
+...
+Invalid: type_error - Expected list or tuple, got <type 'str'>
+>>> undictify(TimeDelta(), (1,2,"not a number"))
+Traceback (most recent call last):
+...
+Invalid: type_error - unsupported type for timedelta microseconds component: str
 
 Like all good undictify implementations, it is idempotent:
 
@@ -99,6 +122,9 @@ True
 >>> undictify(Date(), dt.date()) == dt.date()
 True
 >>> undictify(Time(), dt.time()) == dt.time()
+True
+>>> td = undictify(TimeDelta(), (1,2,3))
+>>> undictify(TimeDelta(), td) == td
 True
 """
 
@@ -150,17 +176,19 @@ def validate_td(dispgraph, value, **kwargs):
         raise Invalid("type_error")
 
 @dictify.when(TimeDelta)
-def dictify_dt(dispgraph, value, **kwargs):
-    return (value.minutes, value.seconds, value.microseconds)
+def dictify_td(dispgraph, value, **kwargs):
+    return (value.days, value.seconds, value.microseconds)
 
 @undictify.when(TimeDelta)
-def undictify_dt(dispgraph, value, **kwargs):
+def undictify_td(dispgraph, value, **kwargs):
+    if isinstance(value, datetime.timedelta):
+        return value
     if not isinstance(value, (list, tuple)):
         raise Invalid("type_error", "Expected list or tuple, got {}".format(type(value)))
-    if len(value != 3):
+    if len(value) != 3:
         raise Invalid("value_error", "Expected 3 items, not {}".format(len(value)))
     try:
-        return dt.timedelta(*value)
+        return datetime.timedelta(*value)
     except TypeError as e:
         raise Invalid("type_error", str(e))
 

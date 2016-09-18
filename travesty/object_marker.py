@@ -2,9 +2,10 @@ import vertigo as vg
 
 from .cantrips.empty_instance import create_instance
 
-from .base import traverse, validate, dictify, undictify, to_typegraph
-from .invalid import Invalid, InvalidAggregator
-from .schema import Schema
+from .base import graphize, validate, dictify, undictify, to_typegraph, traverse
+from .base import clone, mutate, aggregating_errors, IGNORE
+from .invalid import Invalid
+from .schema import Schema, apply_schema
 
 class ObjectMarker(Schema):
     '''Marker for objects that can be assembled by field.
@@ -55,7 +56,7 @@ class ObjectMarker(Schema):
     >>> (p3.x, p3.y) == (p1.x, p1.y)
     True
 
-    Validate and traverse work as you'd expect:
+    Validate and graphize work as you'd expect:
 
     >>> validate(int_pair, p3)
     >>> invalid_p = Pair("hi", "ho")
@@ -69,7 +70,7 @@ class ObjectMarker(Schema):
         ...
     Invalid: type_error - Expected Pair, got tuple
 
-    >>> print(vg.ascii_tree(traverse(int_pair, p3), sort=True))
+    >>> print(vg.ascii_tree(graphize(int_pair, p3), sort=True))
     root: Pair(2, 4)
       +--x: 2
       +--y: 4
@@ -78,7 +79,7 @@ class ObjectMarker(Schema):
     '''
     target_cls = None
 
-    def construct(self, object_kwargs, **kwargs):
+    def construct(self, object_kwargs, **kw):
         if self.constructor:
             return self.constructor(**object_kwargs)
         return create_instance(self.target_cls, object_kwargs)
@@ -88,50 +89,83 @@ class ObjectMarker(Schema):
             self.target_cls = target_cls
         self.constructor = constructor
 
-    def of(self, **kwargs):
-        children = {key:to_typegraph(val) for key, val in kwargs.items()}
+    def of(self, **kw):
+        children = {key:to_typegraph(val) for key, val in kw.items()}
         return vg.PlainGraphNode(self, **children)
 
-def _as_dict(dispgraph, value, raise_invalid=False):
+def _as_dict(dispgraph, value, default_nones=False):
     result = {}
     for attr in dispgraph.key_iter():
-        if raise_invalid and not hasattr(value, attr):
-            raise Invalid("missing_attr", "Missing attribute {}".format(attr))
-        result[attr] = getattr(value, attr)
+        if hasattr(value, attr):
+            result[attr] = getattr(value, attr)
+        elif default_nones:
+            result[attr] = None
+        # If the attr is missing and not default_nones, we don't include it at
+        # all in the dict. We assume that later processing will catch this
+        # problem.
     return result
 
-@traverse.when(ObjectMarker)
-def traverse_obj(dispgraph, value, zipgraph=None, **kwargs):
+
+def extract_obj(dispgraph, obj, kw, default_nones=True):
+    d = _as_dict(dispgraph, obj, default_nones)
+    return apply_schema(dispgraph, d, kw, default_nones)
+
+
+@graphize.when(ObjectMarker)
+def graphize_obj(dispgraph, value, **kw):
     d = _as_dict(dispgraph, value)
-    g = dispgraph.super(ObjectMarker)(d, zipgraph, **kwargs)
-    g.value = value if zipgraph is None else (value, zipgraph.value)
+    g = dispgraph.super(ObjectMarker)(d, **kw)
+    g.value = value
+    if 'zipval' in dispgraph.extras:
+        g.value = (g.value, dispgraph.extras.zipval)
     return g
 
+
+
+@mutate.when(ObjectMarker)
+def mutate_obj(dispgraph, value, **kw):
+    newvals = extract_obj(dispgraph, value, kw)
+    for k, v in newvals.items():
+        setattr(value, k, v)
+    return value
+
+
+@clone.when(ObjectMarker)
+def clone_obj(dispgraph, value, **kw):
+    newvals = extract_obj(dispgraph, value, kw)
+    return dispgraph.marker.construct(newvals, **kw)
+
+
+@traverse.when(ObjectMarker)
+def traverse_obj(dispgraph, value, **kw):
+    extract_obj(dispgraph, value, kw, default_nones=False)
+
+
 @validate.when(ObjectMarker)
-def validate_obj(dispgraph, value, **kwargs):
-    marker = dispgraph.marker
-    if not isinstance(value, marker.target_cls):
-        name = type(value).__name__
-        expected = marker.target_cls.__name__
-        raise Invalid("type_error", "Expected {}, got {}".format(expected, name))
-    d = _as_dict(dispgraph, value, True)
-    return dispgraph.super(ObjectMarker)(d, **kwargs)
+def validate_obj(dispgraph, value, **kw):
+    if kw.get('error_mode', IGNORE) != IGNORE:
+        marker = dispgraph.marker
+        if not isinstance(value, marker.target_cls):
+            name = type(value).__name__
+            expected = marker.target_cls.__name__
+            msg = "Expected {}, got {}".format(expected, name)
+            raise Invalid("type_error", msg, fatal=True)
+    return dispgraph.parent(validate)(value, **kw)
+
 
 @dictify.when(ObjectMarker)
-def dictify_obj(dispgraph, value, **kwargs):
-    d = _as_dict(dispgraph, value)
-    return dispgraph.super(ObjectMarker)(d, **kwargs)
+def dictify_obj(dispgraph, value, **kw):
+    return extract_obj(dispgraph, value, kw, default_nones=True)
+
 
 @undictify.when(ObjectMarker)
-def undictify_obj(dispgraph, value, **kwargs):
+def undictify_obj(dispgraph, value, **kw):
     marker = dispgraph.marker
-    error_agg = InvalidAggregator(autoraise = kwargs.get('fail_early', False))
-    with error_agg.checking():
-        result = dispgraph.super(ObjectMarker)(value, **kwargs)
-    error_agg.raise_if_any()
-    extra_keys = set(value.keys()) - set(dispgraph.key_iter())
-    if extra_keys:
-        error_agg.own_error(Invalid('unexpected_fields', keys=extra_keys))
-    error_agg.raise_if_any()
-    return marker.construct(result, **kwargs)
+    with aggregating_errors(kw.get('error_mode', IGNORE)) as agg:
+        result = dispgraph.super(ObjectMarker)(value, **kw)
+        if agg:
+            extra_keys = set(value.keys()) - set(dispgraph.key_iter())
+            if extra_keys:
+                raise Invalid('unexpected_fields', keys=extra_keys)
+    return marker.construct(result, **kw)
 

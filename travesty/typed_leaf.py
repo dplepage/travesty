@@ -9,6 +9,11 @@ Traceback (most recent call last):
 ...
 Invalid: type_error
 
+>>> try:
+...     validate(int_or_bool, "12")
+... except Invalid as e:
+...     print(e)
+type_error - Expected one of [int, bool]; got str
 
 dictify and undictify always pass through values unchanged, regardless of type:
 
@@ -73,15 +78,16 @@ import numbers
 import sys
 
 if sys.version < '3': # pragma: no cover
-    unicode_type = unicode
     bytes_type = str
 else: # pragma: no cover
     bytes_type = bytes
-    unicode_type = str
     basestring = str
 
 from .base import Leaf, dictify, undictify, validate
 from .invalid import Invalid
+
+def _type_to_str(typ):
+    return getattr(typ, '__name__', str(typ))
 
 class TypedLeaf(Leaf):
     '''Marker for simple types, such as integers and strings.
@@ -94,6 +100,25 @@ class TypedLeaf(Leaf):
         if types:
             self.types = types
 
+    def error_msg_for(self, value):
+        '''
+        >>> TypedLeaf().error_msg_for(12)
+        'Expected nothing; got int'
+        >>> TypedLeaf(bool).error_msg_for(12)
+        'Expected bool; got int'
+        >>> TypedLeaf(str, dict).error_msg_for(12)
+        'Expected one of [str, dict]; got int'
+        '''
+        got = _type_to_str(type(value))
+        if not self.types: # This shouldn't really happen
+            expected = 'nothing'
+        elif len(self.types) == 1:
+            expected = _type_to_str(self.types[0])
+        else:
+            tstr = ', '.join(_type_to_str(t) for t in self.types)
+            expected = 'one of [{}]'.format(tstr)
+        return 'Expected {}; got {}'.format(expected, got)
+
     types = None
 
 # validate checks .types,
@@ -101,28 +126,14 @@ class TypedLeaf(Leaf):
 @validate.when(TypedLeaf)
 def validate_tl(dispgraph, value, **kwargs):
     if not isinstance(value, dispgraph.marker.types):
-        raise Invalid('type_error')
+        raise Invalid('type_error', dispgraph.marker.error_msg_for(value))
 
 Boolean = TypedLeaf.subclass(types=(bool,), __class_name="Boolean")
 String = TypedLeaf.subclass(types=(basestring,), __class_name="String")
-# TODO need tests for Bytes; doctests won't work bcs they're python-3 specific
 Bytes = TypedLeaf.subclass(types=(bytes_type,), __class_name="Bytes")
 Int = TypedLeaf.subclass(types=(numbers.Integral,), __class_name="Int")
 Number = TypedLeaf.subclass(types=(numbers.Real,), __class_name="Number")
 Complex = TypedLeaf.subclass(types=(numbers.Complex,), __class_name="Complex")
-
-# # Most serializes don't handle complex numbers by default, so we stringify them.
-# @dictify.when(Complex)
-# def dictify_complex(dispgraph, value, **kwargs):
-#     return unicode_type(value)
-
-# @undictify.when(Complex)
-# def undictify_complex(dispgraph, value, **kwargs):
-#     try:
-#         return complex(value)
-#     except ValueError:
-#         raise Invalid("format_error", "Invalid complex: {}".format(value))
-
 
 # temporary hack for JSON compatilibity
 # TODO make a separate JSON-aware dfier?
