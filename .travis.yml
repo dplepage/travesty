@@ -6,7 +6,9 @@ python:
   - "pypy"
 # command to install dependencies
 install:
-    - pip install .
-    - pip install doctest-ignore-unicode
+  - pip install .
+  - pip install doctest-ignore-unicode
+  - pip install pytest
 # command to run tests
-script: make test
+script:
+  - py.test travesty/ tests/

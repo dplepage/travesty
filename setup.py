@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 
-from distutils.core import setup
+from setuptools import setup
 
 setup(
     name='travesty',
-    version='0.1.1',
+    version='0.2.0',
     license='BSD',
     author="Daniel Lepage",
     author_email="dplepage@gmail.com",
@@ -26,6 +26,9 @@ See README.rst for more info.
     url='https://github.com/dplepage/travesty',
     install_requires=[
         'vertigo'
+    ],
+    tests_require = [
+        'pytest', 'pytest-cov',
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",
