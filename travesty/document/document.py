@@ -4,6 +4,8 @@ if sys.version >= '3': # pragma: no cover
 
 from uuid import uuid4
 
+import vertigo as vg
+
 from travesty import SchemaObj, String, Invalid
 from travesty import clone, mutate, traverse, graphize, dictify, undictify
 from travesty.base import aggregating_errors, IGNORE
@@ -252,6 +254,7 @@ def dictify_document(dispgraph, doc, **kwargs):
     superdisp = dispgraph.super(Document.marker_cls)
     return superdisp(doc, **kwargs)
 
+
 graphize.default_factory("_tv_docs_cache", lambda: {})
 
 @graphize.when(Document.marker_cls)
@@ -262,15 +265,16 @@ def graphize_document(dispgraph, doc, **kwargs):
         return cache[doc]
     # Restrict to uid if the doc isn't loaded OR we're not supposed to traverse.
     superdisp = dispgraph.super(Document.marker_cls)
-
     if not doc.loaded:
         superdisp = superdisp.restrict(['uid'])
     elif 'traverse_docs' in dispgraph.extras:
         if not dispgraph.extras.traverse_docs:
             superdisp = superdisp.restrict(['uid'])
-    cache[doc] = superdisp(doc, **kwargs)
+    cache[doc] = vg.PlainGraphNode()
+    new = superdisp(doc, **kwargs)
+    cache[doc].value = new.value
+    cache[doc]._edges = new._edges
     return cache[doc]
-
 
 
 traverse.default_factory("_tv_docs_processed", lambda: set())
