@@ -101,7 +101,7 @@ class TestMisc(object):
     def test_undictify(self):
         with pytest.raises(tv.Invalid) as e:
             tv.undictify(Point, dict(x=1, y=2, label='hi', extra=12))
-        e.match("unexpected_fields - {'keys': {'extra'}}")
+        e.match("unexpected_fields - {'keys': .*'extra'..?}")
 
     def test_pointless_validate(self):
         tv.validate(Point, Point(None, None, None), error_mode=tv.IGNORE)

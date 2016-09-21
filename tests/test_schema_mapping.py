@@ -74,7 +74,7 @@ def test_clone_extras():
     assert 'other_key' not in l2
     with pytest.raises(tv.Invalid) as e:
         tv.clone(LineSchemaFail, l, error_mode=tv.CHECK)
-    e.match("unexpected_fields - {'keys': {'other_key'}}")
+    e.match("unexpected_fields - {'keys': .*'other_key'..?}")
 
 def test_mutate():
     l = mkline(1, 2, 3, 4)
@@ -149,8 +149,8 @@ def test_validate_extras():
     tv.validate(LineSchemaSave, l)
     with pytest.raises(tv.Invalid) as e:
         tv.validate(LineSchema, l)
-    e.match("unexpected_fields - {'keys': {'other_key'}}")
+    e.match("unexpected_fields - {'keys': .*'other_key'..?}")
     with pytest.raises(tv.Invalid) as e:
         tv.validate(LineSchemaFail, l)
-    e.match("unexpected_fields - {'keys': {'other_key'}}")
+    e.match("unexpected_fields - {'keys': .*'other_key'..?}")
 
