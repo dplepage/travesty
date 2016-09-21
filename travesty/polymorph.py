@@ -136,7 +136,7 @@ def apply_pmorph(dispgraph, value, error_mode=IGNORE, **kw):
     except UnknownType:
         if error_mode == IGNORE:
             raise
-        raise Invalid("type_error", "Unknown type: {}".format(type(value)))
+        raise Invalid("type_error", "Unrecognized type: {}".format(type(value)))
     value = dispgraph[name](value, **kw)
     return (name, value)
 
@@ -162,16 +162,14 @@ def undictify_pmorph(dispgraph, value, error_mode=IGNORE, **kw):
         if len(value) != 2:
             raise Invalid('bad_list')
     name, value = value
+    if error_mode != IGNORE and name not in dispgraph:
+        raise Invalid('bad_typename', name)
     return dispgraph[name](value, **kw)
 
 
 @validate.when(Polymorph)
 def validate_pmorph(dispgraph, value, **kw):
-    try:
-        name = dispgraph.marker.name_for_val(value)
-    except UnknownType:
-        raise Invalid("type_error", "Unrecognized type: {}".format(type(value)))
-    dispgraph[name](value, **kw)
+    apply_pmorph(dispgraph, value, **kw)
 
 
 @graphize.when(Polymorph)
