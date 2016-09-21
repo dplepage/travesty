@@ -11,64 +11,99 @@ class UnknownType(Exception):
 
 
 class Polymorph(Marker):
-    '''The following docstring is ENTIRELY SUSPECT. TODO: Fix it.
+    '''
+    A marker for selecting between several types.
 
-    A dictifier that selects between several dictifiables based on classes.
+    Generally you want to assemble these using .mkgraph, which takes a mapping
+    from string names to either traversable types or (types, typegraph) pairs.
 
-    The mapping argument is a dict whose keys are strings and whose values are
-    either (class_list, Dictifier) pairs or Dictifiable classes.
+    When operating on an object, the Polymorph will select which of its child
+    typegraphs to use based on the type of the object it encounters; when
+    dictifying, it will store the string name so that later undictification can
+    determine what type was here.
 
-    Polymorph can Dictify any object that is an instance of one of the
-    Dictifiable classes or any class in one of the class_list entries; it will
-    dictify it as a tuple of (name, value), where name identifies which
-    Dictifier was used and value is the dictified object; on undictifiance, it
-    undictifies the value using the Dictifier for that name.
+    For example, consider a simple Point type:
 
-    For example:
-
-    >>> from . import Number, Complex, SchemaObj
-    >>> class Point(SchemaObj):
-    ...     field_types = dict(x=Number(), y=Complex())
+    >>> import travesty as tv
+    >>> class Point(tv.SchemaObj):
+    ...     field_types = dict(x=tv.Number(), y=tv.Complex())
     ...     def __repr__(self): return "Point({}, {})".format(self.x, self.y)
     ...
-    >>> num_or_point = Polymorph.mkgraph({
+
+    We can create a typegraph representing a value that could be a Point or a
+    plain number as follows:
+
+    >>> NumOrPoint = Polymorph.mkgraph({
     ...     'point':Point,
-    ...     'num':((int, float), Number()),
+    ...     'num':((int, float), tv.Number()),
     ... })
-    >>> dictify(num_or_point, 12)
+
+    This typegraph indicates that values of type Point should be processed using
+    Point's typegraph, and values of type int or float should be processed using
+    the typegraph Number() (well, to_typegraph(Number())). This means that
+    various dispatchers can be used on both types:
+
+    >>> tv.clone(NumOrPoint, 12)
+    12
+    >>> tv.clone(NumOrPoint, Point(x=1, y=2))
+    Point(1, 2)
+    >>> tv.validate(NumOrPoint, 12)
+    >>> tv.validate(NumOrPoint, Point(x=1, y=2))
+
+    Validate and other error-checking will fail on unknown types:
+
+    >>> tv.validate(NumOrPoint, "blah")
+    Traceback (most recent call last):
+    ...
+    Invalid: type_error - Unrecognized type: <type 'str'>
+    >>> tv.clone(NumOrPoint, "blah")
+    Traceback (most recent call last):
+    ...
+    UnknownType: str
+    >>> tv.clone(NumOrPoint, "blah", error_mode=tv.CHECK)
+    Traceback (most recent call last):
+    ...
+    Invalid: type_error: Unrecognized type: <type 'str'>
+
+    Dictify returns a tuple of (type id, dictified value), so that you can later
+    determine what type you had:
+
+    >>> tv.dictify(NumOrPoint, 12)
     ('num', 12)
-    >>> dictify(num_or_point, 3.5)
+    >>> dictify(NumOrPoint, 3.5)
     ('num', 3.5)
-    >>> dictify(num_or_point, Point(x=1, y=3)) == ('point', {'x':1, 'y':3})
+    >>> dictify(NumOrPoint, Point(x=1, y=3)) == ('point', {'x':1, 'y':3})
     True
-    >>> undictify(num_or_point, ('num', 42))
+
+    Undictify expects such a tuple:
+
+    >>> tv.undictify(NumOrPoint, ('num', 42))
     42
-    >>> p = undictify(num_or_point, ('point', {'x':-1, 'y':2+2j}))
+    >>> p = tv.undictify(NumOrPoint, ('point', {'x':-1, 'y':2+2j}))
     >>> p.x
     -1
     >>> p.y
     (2+2j)
 
-    The input to undictify MUST be a list or tuple of length 2:
+    The input to undictify MUST be a list or tuple of length 2, and the first
+    item must be known to the Polymorph:
 
-    >>> undictify(num_or_point, 42)
+    >>> tv.undictify(NumOrPoint, 42)
     Traceback (most recent call last):
         ...
     Invalid: type_error
-    >>> undictify(num_or_point, ('num', 42, 'something extra for no reason'))
+    >>> tv.undictify(NumOrPoint, ('num', 42, 'something extra for no reason'))
     Traceback (most recent call last):
         ...
     Invalid: bad_list
-
-    It will validate only the types in its list:
-
-    >>> validate(num_or_point, 3)
-    >>> validate(num_or_point, 3.5)
-    >>> validate(num_or_point, p)
-    >>> validate(num_or_point, 'hi')
+    >>> tv.undictify(NumOrPoint, ('weird_key', 42))
     Traceback (most recent call last):
-    ...
-    Invalid: type_error - Unrecognized type: <type 'str'>
+        ...
+    Invalid: bad_typename - weird_key
+    >>> tv.undictify(NumOrPoint, ('weird_key', 42), error_mode=IGNORE)
+    Traceback (most recent call last):
+        ...
+    KeyError: weird_key
 
     Traversal with zipvals expects the graph to have keys matching the main
     graph structure, as always, but note that the graph value at the actual
@@ -76,16 +111,16 @@ class Polymorph(Marker):
 
     >>> g = vg.from_dict(dict(_self="Ignored", num="A number", point=dict(
     ... _self="A Point", x="The X", y="The Y")))
-    >>> print(vg.ascii_tree(graphize(num_or_point, 3, extras_graphs=dict(zipval=g))))
+    >>> print(vg.ascii_tree(graphize(NumOrPoint, 3, extras_graphs=dict(zipval=g))))
     root: (3, 'A number')
-    >>> print(vg.ascii_tree(graphize(num_or_point, p, extras_graphs=dict(zipval=g)), sort=True))
+    >>> print(vg.ascii_tree(graphize(NumOrPoint, p, extras_graphs=dict(zipval=g)), sort=True))
     root: (Point(-1, (2+2j)), 'A Point')
       +--x: (-1, 'The X')
       +--y: ((2+2j), 'The Y')
 
     Note that the initialization above is short for the longer form:
-    >>> num_or_point = Polymorph({'point':Point, 'num':(int, float)}).of(
-    ...     point = Point, num=Number()
+    >>> NumOrPoint = Polymorph({'point':Point, 'num':(int, float)}).of(
+    ...     point = Point, num=tv.Number()
     ... )
 
 
