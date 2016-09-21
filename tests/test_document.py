@@ -9,7 +9,9 @@ from travesty.document import DoubleLoadException
 from helpers import match_asc, expecting_invalid
 
 class Foo(Document):
-    field_types = dict(bar=tv.String())
+    field_types = dict(
+        bar = tv.String(),
+    )
 
 class FooHolder(Document):
     field_types = dict(
@@ -19,10 +21,14 @@ class FooHolder(Document):
 
 class LinkedList(Document):
     field_types = lambda cls: dict(
-        value = tv.String(),
+        value = tv.Int(),
         next = tv.Optional.wrap(cls),
     )
 LinkedList._finalize_typegraph()
+
+def flatten(l):
+    # Don't call on a looped list
+    return [l.value] + flatten(l.next) if l else []
 
 def mkfoos(name, *bars):
     '''Create a FooHolder with the specified bars.
@@ -92,11 +98,11 @@ def test_clone():
 
 
 def test_recursive_clone():
-    l = mklist(["first", "second", "third"], closed=True)
+    l = mklist([1, 2, 3], closed=True)
     copy = tv.clone(LinkedList, l)
-    assert copy.value == 'first'
-    assert copy.next.value == 'second'
-    assert copy.next.next.value == 'third'
+    assert copy.value == 1
+    assert copy.next.value == 2
+    assert copy.next.next.value == 3
     assert copy.next.next.next is copy
 
 
@@ -114,35 +120,35 @@ def test_mutate():
 
 
 def test_dictify():
-    l = mklist(["first", "second", "third"], closed=True)
+    l = mklist([1, 2, 3], closed=True)
     assert tv.dictify(LinkedList, l) == dict(
         uid = 'node0',
-        value = 'first',
+        value = 1,
         next = dict(
             uid = 'node1',
-            value = 'second',
+            value = 2,
             next = dict(
                 uid = 'node2',
-                value = 'third',
+                value = 3,
                 next = dict(uid='node0'))))
 
 def test_undictify():
     l = tv.undictify(LinkedList, dict(
         uid = 'node0',
-        value = 'first',
+        value = 1,
         next = dict(
             uid = 'node1',
-            value = 'second',
+            value = 2,
             next = dict(
                 uid = 'node2',
-                value = 'third',
+                value = 3,
                 next = dict(uid='node0')))))
     assert l.uid == 'node0'
-    assert l.value == 'first'
+    assert l.value == 1
     assert l.next.uid == 'node1'
-    assert l.next.value == 'second'
+    assert l.next.value == 2
     assert l.next.next.uid == 'node2'
-    assert l.next.next.value == 'third'
+    assert l.next.next.value == 3
     assert l.next.next.next is l
 
 def test_misc_failures():
@@ -244,3 +250,39 @@ def test_traverse_docs():
           +--name: 'The Holder of Foo'
           +--uid: 'theholder'
     """)
+    h1 = tv.clone(FooHolder, holder)
+    h2 = tv.clone(FooHolder, holder, extras_graphs=extras)
+    assert h1.foos[0] is not holder.foos[0]
+    assert h2.foos[0] is holder.foos[0]
+
+    # A linked list with traverse_docs that only goes 3 deep
+    l = mklist([1,2,3,4,5])
+    extras = dict(traverse_docs=vg.from_flat({
+        '': True,
+        'next': True,
+        'next/next': True
+    }))
+
+
+    sum_ints = tv.traverse.sub()
+    @sum_ints.when(tv.Int)
+    def add_int(dispgraph, value, **kw):
+        kw['accum'][0] = kw['accum'][0]+value
+
+    x = [0]
+    sum_ints(LinkedList, l, accum=x)
+    assert x[0] == 15
+    x = [0]
+    sum_ints(LinkedList, l, accum=x, extras_graphs=extras)
+    assert x[0] == 6
+
+    double_ints = tv.mutate.sub()
+    @double_ints.when(tv.Int)
+    def double_int(dispgraph, value, **kw):
+        return value*2
+
+    double_ints(LinkedList, l)
+    assert flatten(l) == [2,4,6,8,10]
+    double_ints(LinkedList, l, extras_graphs = extras)
+    assert flatten(l) == [4,8,12,8,10]
+

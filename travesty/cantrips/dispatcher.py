@@ -106,7 +106,8 @@ class _BaseDispatcher(object):
             val = val[1]
         return fn(self, val, *args, **kwargs)
 
-    def call(self, *args, **kwargs):
+    def call(self, *args, **kwargs): # pragma: no cover
+        # There are no current subclasses that don't override this method
         return self.raw_call(*args, **kwargs)
 
     def __call__(self, val, *args, **kwargs):

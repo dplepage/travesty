@@ -116,7 +116,7 @@ def clone_mapping(dispgraph, value, **kw):
         extra_keys = set(value.keys()) - set(dispgraph.key_iter())
         if extra_keys:
             if agg and marker.extra_field_policy == 'error':
-                agg.own_error(Invalid('unexpected_fields', keys=extra_keys))
+                raise Invalid('unexpected_fields', keys=extra_keys)
             if marker.extra_field_policy == 'save':
                 for key in extra_keys:
                     result[key] = value[key]
@@ -135,58 +135,60 @@ class StrMapping(Marker):
 
     The sub child in the typegraph determines the types of the mapping's values.
 
+    For example, here's a type that maps strings to dates:
+
+    >>> from datetime import date, timedelta
     >>> from collections import OrderedDict
-    >>> from vertigo import PlainGraphNode as G
-    >>> from . import Int, Date, List, undictify, dictify
-    >>> from datetime import date
-    >>> StringToNumList = StrMapping().of(List().of(Int()))
-    >>> example = OrderedDict([("foo",[1,2,3,4]), ("bar",[6,12,-4])])
-    >>> print(vg.ascii_tree(graphize(StringToNumList, example), sort=True))
-    root: OrderedDict([('foo', [1, 2, 3, 4]), ('bar', [6, 12, -4])])
-      +--bar: [6, 12, -4]
-      |  +--0: 6
-      |  +--1: 12
-      |  +--2: -4
-      +--foo: [1, 2, 3, 4]
-         +--0: 1
-         +--1: 2
-         +--2: 3
-         +--3: 4
-    >>> cstruct = dictify(StringToNumList, example)
-    >>> cstruct == {'foo':[1,2,3,4], 'bar':[6,12,-4]}
+    >>> import travesty as tv
+    >>> DateMap = StrMapping().of(tv.Date())
+    >>> d1, d2 = date(1985, 9, 16), date(1980, 3, 17)
+    >>> example = OrderedDict([
+    ...     ("foo", d1),
+    ...     ("bar", d2)])
+    >>> print(vg.ascii_tree(graphize(DateMap, example), sort=True))
+    root: OrderedDict([('foo', datetime.date(1985, 9, 16)), ('bar', datetime.date(1980, 3, 17))])
+      +--bar: datetime.date(1980, 3, 17)
+      +--foo: datetime.date(1985, 9, 16)
+
+    Dictifying it will map each key to its dictified value:
+
+    >>> cstruct = tv.dictify(DateMap, example)
+    >>> cstruct == {'foo':'1985-09-16', 'bar':'1980-03-17'}
     True
-    >>> undictify(StringToNumList, cstruct) == dict(example)
+    >>> tv.undictify(DateMap, cstruct) == dict(example)
     True
-    >>> undictify(StringToNumList, None)
+
+    The validators expect a dict, and will complain if non-string keys are
+    present:
+
+    >>> tv.undictify(DateMap, None)
     Traceback (most recent call last):
     ...
     Invalid: type_error - Expected dict, got <type 'Nonetype'>
-    >>> undictify(StringToNumList, {12:[1,2,3]})
+    >>> tv.undictify(DateMap, {12:d1})
     Traceback (most recent call last):
     ...
     Invalid: value_error/bad_keys - Bad keys - {'keys': [12]}
-    >>> validate(StringToNumList, example)
-    >>> validate(StringToNumList, {'foo':[1,"hi",3]})
+    >>> tv.validate(DateMap, example)
+    >>> tv.validate(DateMap, {'foo':'not a date'})
     Traceback (most recent call last):
     ...
-    Invalid: foo: [1: [type_error]]
-    >>> validate(StringToNumList, {12:[1,2,3]})
+    Invalid: foo: [type_error]
+    >>> tv.validate(DateMap, {12:d1})
     Traceback (most recent call last):
     ...
     Invalid: value_error/bad_keys - Bad keys - {'keys': [12]}
-    >>> validate(StringToNumList, 12)
-    Traceback (most recent call last):
-    ...
-    Invalid: type_error - Expected dict, got <type 'int'>
 
-    >>> try:
-    ...     undictify(StringToNumList, OrderedDict([
-    ...         ('hello', None),
-    ...     ]))
-    ... except Invalid as e:
-    ...     print(vg.ascii_tree(e.as_graph(), sort=True))
-    root: []
-      +--hello: [SingleInvalid('type_error',)]
+    Mutate will leave the keys unchanged:
+
+    >>> Str2Str = StrMapping().of(tv.String())
+    >>> double = tv.mutate.sub()
+    >>> @double.when(tv.String)
+    ... def double_string(dispgraph, value, **kw): return value*2
+    ...
+    >>> x = dict(a='b', c='d')
+    >>> double(Str2Str, x) == dict(a='bb', c='dd')
+    True
     '''
     def of(self, sub):
         return vg.PlainGraphNode(self, sub = to_typegraph(sub))
@@ -249,17 +251,18 @@ class UniMapping(Marker):
     mapping's keys and values, respectively.
 
     >>> from collections import OrderedDict
-    >>> from vertigo import PlainGraphNode as G
-    >>> from . import Int, Date, List, undictify, dictify
-    >>> from datetime import date
-    >>> DateToNumList = G.build(dict(
-    ...     _self=UniMapping(),
-    ...     key=Date(),
-    ...     val=dict(_self=List(), sub=Int()))
+    >>> import travesty as tv
+    >>> from datetime import date, timedelta
+    >>> DateToNumList = UniMapping().of(
+    ...     key=tv.Date(),
+    ...     val=tv.List().of(tv.Int()),
     ... )
     >>> d1, d2 = date(1985, 9, 16), date(1980, 3, 17)
     >>> example = OrderedDict([(d1,[1,2,3,4]), (d2,[6,12,-4])])
-    >>> print(vg.ascii_tree(graphize(DateToNumList, example), sort=True))
+
+    Graphize will label the keys `key_i` and the values `value_i`:
+
+    >>> print(vg.ascii_tree(tv.graphize(DateToNumList, example), sort=True))
     root: OrderedDict([(datetime.date(1985, 9, 16), [1, 2, 3, 4]), (datetime.date(1980, 3, 17), [6, 12, -4])])
       +--key_0: datetime.date(1985, 9, 16)
       +--key_1: datetime.date(1980, 3, 17)
@@ -272,42 +275,52 @@ class UniMapping(Marker):
          +--0: 6
          +--1: 12
          +--2: -4
-    >>> cstruct = dictify(DateToNumList, example)
+
+    Dictifying will map each dictified key to its dictified value:
+
+    >>> cstruct = tv.dictify(DateToNumList, example)
     >>> cstruct == {u'1985-09-16':[1,2,3,4], '1980-03-17':[6,12,-4]}
     True
-    >>> undictify(DateToNumList, cstruct) == example
+    >>> tv.undictify(DateToNumList, cstruct) == example
     True
-    >>> undictify(DateToNumList, None)
-    Traceback (most recent call last):
-    ...
-    Invalid: type_error - Expected dict, got <type 'Nonetype'>
-    >>> validate(DateToNumList, example)
-    >>> validate(DateToNumList, {"not a date":[1,2,3]})
-    Traceback (most recent call last):
-    ...
-    Invalid: key_0: [type_error]
-    >>> validate(DateToNumList, {d1:[1,"hi",3]})
-    Traceback (most recent call last):
-    ...
-    Invalid: value_0: [1: [type_error]]
-    >>> validate(DateToNumList, 12)
+
+    Validation expects a dictionary:
+
+    >>> tv.validate(DateToNumList, example)
+    >>> tv.validate(DateToNumList, 12)
     Traceback (most recent call last):
     ...
     Invalid: type_error - Expected dict, got <type 'int'>
 
+    Exceptions will also use `key_i`/`value_i` to indicate sub-problems:
+
     >>> try:
-    ...     undictify(DateToNumList, OrderedDict([
-    ...         ('1985-09-16', [1, 'hi']),
-    ...         ('hello', None),
+    ...     tv.undictify(DateToNumList, OrderedDict([
+    ...         ('1985-09-16', None),
+    ...         ('hello', [1, 'hi']),
     ...     ]))
     ... except Invalid as e:
     ...     print(vg.ascii_tree(e.as_graph(), sort=True))
     root: []
       +--key_1: [SingleInvalid('bad_format',)]
-      +--value_1: [SingleInvalid('type_error',)]
+      +--value_0: [SingleInvalid('type_error',)]
 
     Caveat: Note that if the value passed in is not an OrderedDict, then there's
-    no guarantee of the numerical order of the errors or of the traversal -
+    no guarantee of the numerical order of the errors or of the graphize result.
+    There's not really a good way to handle this; use OrderedDict if you need
+    to be able to map problems back to their specific keys.
+
+    Mutate will replace keys if they change:
+
+    >>> one_day_more = tv.mutate.sub()
+    >>> @one_day_more.when(tv.Date)
+    ... def tomorrow(dispgraph, value, **kw):
+    ...     return value + timedelta(days=1)
+    ...
+    >>> _ = one_day_more(DateToNumList, example)
+    >>> example[date(1985, 9, 17)]
+    [1, 2, 3, 4]
+
     '''
     def of(self, key, val):
         key, val = to_typegraph(key), to_typegraph(val)
@@ -369,8 +382,3 @@ def mutate_unimap(dispgraph, value, **kw):
 @traverse.when(UniMapping)
 def traverse_unimap(dispgraph, value, **kw):
     apply_unimap(dispgraph, value, kw)
-
-
-if __name__ == '__main__': # pragma: no cover
-    import doctest
-    doctest.testmod()
