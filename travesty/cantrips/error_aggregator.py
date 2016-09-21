@@ -277,6 +277,8 @@ class ErrorAggregator(object):
         try:
             yield
         except self.catch_type as e:
+            if e is self.error:
+                raise
             self.put_error(keys, e)
 
     @contextmanager
@@ -285,6 +287,8 @@ class ErrorAggregator(object):
         try:
             yield
         except self.catch_type as e:
+            if e is self.error:
+                raise
             self.sub_error(key, e)
 
     def has_errors(self):
