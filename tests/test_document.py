@@ -39,7 +39,7 @@ def mkfoos(name, *bars):
     '''
     foos = {}
     for bar in bars:
-        foos[bar] = Foo(uid=bar+"_uid", bar=bar)
+        foos[bar] = Foo(uid="{}_uid".format(bar), bar=bar)
     return FooHolder(
         uid=name+"_uid",
         name=name,
@@ -285,4 +285,45 @@ def test_traverse_docs():
     assert flatten(l) == [2,4,6,8,10]
     double_ints(LinkedList, l, extras_graphs = extras)
     assert flatten(l) == [4,8,12,8,10]
+
+def test_ignorant_undictify():
+    f = tv.undictify(Foo, dict(uid='hi', bar='ho'), error_mode=tv.IGNORE)
+    assert f.uid == 'hi'
+    assert f.bar == 'ho'
+
+def test_clone_error_checking():
+    with pytest.raises(tv.Invalid) as e:
+        tv.clone(FooHolder, None, error_mode=tv.CHECK)
+    e.match('type_error - Expected FooHolder, got NoneType')
+    # Run it once for branch coverage
+    tv.clone(FooHolder, mkfoos("test", "hi"), error_mode=tv.CHECK)
+
+def test_clone_unloaded():
+    x = FooHolder._create_unloaded('foo')
+    y = tv.clone(FooHolder, x)
+    assert y is not x
+    assert y.loaded == x.loaded
+    assert y.uid == 'foo'
+
+def test_graphize_unloaded():
+    x = FooHolder._create_unloaded('foo')
+    match_asc(tv.graphize(FooHolder, x), '''
+        root: <Unloaded FooHolder: foo>
+          +--uid: 'foo'
+    ''')
+
+def test_graphize_recursive():
+    x = mklist([1,2,3], closed=True)
+    match_asc(tv.graphize(LinkedList, x), '''
+        root: <LinkedList: node0>
+          +--next: <LinkedList: node1>
+          |  +--next: <LinkedList: node2>
+          |  |  +--next - recursive copy of root
+          |  |  +--uid: 'node2'
+          |  |  +--value: 3
+          |  +--uid: 'node1'
+          |  +--value: 2
+          +--uid: 'node0'
+          +--value: 1
+    ''')
 

@@ -33,5 +33,5 @@ def expecting_invalid(msg):
 
 def match_asc(g, s):
     x = vg.ascii_tree(g, sort=True)
-    assert x == textwrap.dedent(s).strip()
+    assert x == textwrap.dedent(s).strip(), x
 
