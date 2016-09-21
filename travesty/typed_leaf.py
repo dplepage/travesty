@@ -83,7 +83,7 @@ else: # pragma: no cover
     bytes_type = bytes
     basestring = str
 
-from .base import Leaf, dictify, undictify, validate
+from .base import Leaf, dictify, undictify, validate, IGNORE, CHECK
 from .invalid import Invalid
 
 def _type_to_str(typ):
@@ -125,6 +125,10 @@ class TypedLeaf(Leaf):
 
 @validate.when(TypedLeaf)
 def validate_tl(dispgraph, value, **kwargs):
+    if kwargs.get('error_mode', CHECK) == IGNORE:
+        # why would you call validate with error_mode IGNORE? Nonetheless, it'll
+        # do what you apparently want.
+        return
     if not isinstance(value, dispgraph.marker.types):
         raise Invalid('type_error', dispgraph.marker.error_msg_for(value))
 
