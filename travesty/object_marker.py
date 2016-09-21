@@ -74,8 +74,6 @@ class ObjectMarker(Schema):
     root: Pair(2, 4)
       +--x: 2
       +--y: 4
-
-
     '''
     target_cls = None
 
@@ -106,7 +104,7 @@ def _as_dict(dispgraph, value, default_nones=False):
     return result
 
 
-def extract_obj(dispgraph, obj, kw, default_nones=True):
+def extract_obj(dispgraph, obj, kw, default_nones=False):
     d = _as_dict(dispgraph, obj, default_nones)
     return apply_schema(dispgraph, d, kw, default_nones)
 
