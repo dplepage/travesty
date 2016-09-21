@@ -8,7 +8,7 @@ python:
 install:
   - pip install .
   - pip install doctest-ignore-unicode
-  - pip install pytest
+  - pip install pytest==3.0.2
 # command to run tests
 script:
   - py.test travesty/ tests/
