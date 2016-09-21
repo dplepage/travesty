@@ -64,5 +64,9 @@ def clone_schema(dispgraph, value, **kw):
 
 @mutate.when(Schema)
 def mutate_schema(dispgraph, value, **kw):
+    error_mode = kw.get('error_mode', IGNORE)
+    if error_mode != IGNORE and not isinstance(value, dict):
+        msg = 'Expected a dict, got {} instead'.format(type(value))
+        raise Invalid("type_error", msg, fatal=True)
     value.update(apply_schema(dispgraph, value, kw))
     return value
