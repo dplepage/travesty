@@ -20,7 +20,7 @@ graph.
 A lot of these tools are specifically aimed at doing function dispatch based
 on a type graph for some object type.
 
-See README.rst for more info.
+See README.md for more info.
 
 """,
     url='https://github.com/dplepage/travesty',
