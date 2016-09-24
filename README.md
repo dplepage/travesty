@@ -303,7 +303,9 @@ Traceback (most recent call last):
 NotImplementedError: <EmailAddrMarker>
 
 ```
+
 We can fix this by making sure to define these:
+
 ```python
 >>> @tv.dictify.when(EmailAddrMarker)
 ... def df_email_addr(d, addr, **kw):
@@ -311,6 +313,7 @@ We can fix this by making sure to define these:
 
 >>> print(tv.dictify(EmailAddrMarker(), e))
 Fiona Foonly <fiona@foon.ly>
+
 ```
 
 ### Dispatcher Inheritance
@@ -323,40 +326,54 @@ dispatchers except where you specifically override it.
 
 For example, the default `dictify` for `tv.Date` is to stringify the date:
 ```python
+
 >>> datelist_marker = tv.List().of(tv.Date())
 >>> datelist = [datetime.date(1815, 12, 10), datetime.date(1882, 3, 23)]
 >>> tv.dictify(datelist_marker, datelist)
 ['1815-12-10', '1882-03-23']
+
 ```
+
 This is because many serialization frameworks, such as `json`, do not
 support dates by default. However, if you're dictifying objects in order to
 serialize them with a data-aware serialization tool like YAML, you might
 prefer that dictify and undictify pass dates through unchanged. In this case,
 you can define your own dispatchers based on each:
+
 ```python
+
 >>> my_dictify = tv.GraphDispatcher([tv.dictify])
 >>> my_undictify = tv.GraphDispatcher([tv.undictify])
+
 ```
+
 The argument to GraphDispatcher is a list of parents; when operating on a
 marker, the dispatcher will check each parent in turn to see if the parent has
 behavior for that marker. Thus, as defined above, `my_dictify` and
 `my_undictify` are synonyms for `dictify` and `undictify`, respectively.
 But now we can add custom behavior to them:
+
 ```python
+
 >>> @my_dictify.when(tv.Date)
 ... @my_undictify.when(tv.Date)
 ... def passthrough_date(d, date, **kw):
 ...     return date
+
 ```
+
 Now these two functions behave exactly like their parents except when
 encountering dates, in which case they pass them through unchanged (note that
 the behavior on `tv.List` is unchanged):
+
 ```python
+
 >>> my_dictify(datelist_marker, datelist)
 [datetime.date(1815, 12, 10), datetime.date(1882, 3, 23)]
 
 >>> my_undictify(datelist_marker, datelist)
 [datetime.date(1815, 12, 10), datetime.date(1882, 3, 23)]
+
 ```
 
 ### Wrappers
@@ -376,15 +393,21 @@ to work normally on that typegraph, as though the marker weren't there.
 
 For example, suppose you want to require that a date be later than 1900. Then
 you might define:
+
 ```python
+
 >>> class After1900(tv.Wrapper): pass
 >>> @tv.validate.when(After1900)
 ... def check_1900(d, date, **kw):
 ...     if date < datetime.date(1900, 1, 1):
 ...         raise tv.Invalid("date/too_early", "Date must be after 1900")
+
 ```
+
 Recall our `Person` typegraph from earlier:
+
 ```python
+
 >>> typegraph = Person.typegraph
 >>> print(vg.ascii_tree(typegraph, sort=True))
 root: <PersonMarker>
@@ -392,16 +415,24 @@ root: <PersonMarker>
   +--favorites: <List>
   |  +--sub: <String>
   +--name: <String>
+
 ```
+
 A Person with an early birthday still passes validation:
+
 ```python
+
 >>> ramanujan = Person("Srinivasa Ramanujan", datetime.date(1887, 12, 22))
 >>> ramanujan.favorites = ["Nested Radicals", "Infinite Series"]
 >>> tv.validate(typegraph, ramanujan)
+
 ```
+
 If we tweak the typegraph to wrap `birthday` in an `After1900`, validation
 will now fail:
+
 ```python
+
 >>> overlay = vg.from_flat({'birthday':After1900(typegraph['birthday'].value)})
 >>> typegraph2 = vg.overlay(typegraph, overlay, reversed=True)
 >>> print(vg.ascii_tree(typegraph2, sort=True))
@@ -414,17 +445,21 @@ root: <PersonMarker>
 Traceback (most recent call last):
     ...
 travesty.invalid.Invalid: birthday: [date/too_early - Date must be after 1900]
+
 ```
+
 But because other dispatchers ignore wrappers, `dictify` will still work on
 the altered typegraph:
 
 ```python
+
 >>> tv.dictify(typegraph2, ramanujan) == {
 ...     'name': 'Srinivasa Ramanujan',
 ...     'birthday': '1887-12-22',
 ...     'favorites': ['Nested Radicals', 'Infinite Series'],
 ... }
 True
+
 ```
 
 ## More Stuff

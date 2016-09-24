@@ -27,11 +27,10 @@ See README.md for more info.
     install_requires=[
         'vertigo'
     ],
-    tests_require = [
-        'pytest', 'pytest-cov',
-    ],
+    tests_require = ['pytest', 'pytest-cov'],
     classifiers=[
-        "Development Status :: 3 - Alpha",
+        "Development Status :: 4 - Beta",
         "Programming Language :: Python :: 2",
+        "Programming Language :: Python :: 3",
     ]
 )

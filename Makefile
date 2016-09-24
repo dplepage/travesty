@@ -1,29 +1,16 @@
 PACKAGE = travesty
 
 WITH_COVERAGE = --cov=${PACKAGE}
-FILES = ${PACKAGE}/ tests/ README*.rst
+FILES = ${PACKAGE}/ tests/ README.md README2.rst
 
-smoke27:
-	py.test2.7 -x ${FILES}
+smoke:
+	py.test -x ${FILES}
 
-smoke35:
-	py.test3.5 -x ${FILES}
+test:
+	py.test ${WITH_COVERAGE} ${FILES}
 
-test27:
-	py.test2.7 ${WITH_COVERAGE} ${FILES}
-
-test35:
-	py.test3.5 ${WITH_COVERAGE} ${FILES}
-
-html27: test27
-	coverage2.7 html --include='${PACKAGE}/*'
-
-html35: test35
-	coverage3.5 html --include='${PACKAGE}/*'
-
-html: html27
-smoke: smoke27 smoke35
-test: test27 test35
+html: test
+	coverage html --include='${PACKAGE}/*'
 
 flakes:
-	pyflakes .
+	pyflakes tests ${PACKAGE}
